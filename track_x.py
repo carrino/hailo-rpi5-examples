@@ -82,7 +82,10 @@ def on_probe(pad, info):
                 continue
             b = det.get_bbox()
             x, y, w, h = _bbox_xywh(b)
-            print(f"[x] {x} {y} {h} {w}")
+            c = getattr(det, "get_confidence", lambda: None)()
+            print(f"[x] {x} {y} {h} {w} {c}")
+            if c < 0.3:
+                continue
             area = w * h
             if area > best_area:
                 best_area, best = area, (x, y, w, h)
@@ -99,111 +102,6 @@ def on_probe(pad, info):
         print("-1.0", flush=True)
 
     return Gst.PadProbeReturn.OK
-
-
-
-#def on_probe(pad, info):
-#    import hailo
-#    buf = info.get_buffer()
-#    if not buf:
-#        return Gst.PadProbeReturn.OK
-#
-#    # Get frame size from caps
-#    caps = pad.get_current_caps() or pad.get_allowed_caps()
-#    try:
-#        s = caps.get_structure(0)
-#        fw = int(s.get_value('width')); fh = int(s.get_value('height'))
-#    except Exception:
-#        return Gst.PadProbeReturn.OK
-#
-#    try:
-#        roi = hailo.get_roi_from_buffer(buf)
-#    except Exception:
-#        return Gst.PadProbeReturn.OK
-#
-#    objs = list(roi.get_objects_typed(hailo.HAILO_DETECTION))
-#    # periodic debug
-#    if not hasattr(on_probe, "_f"): on_probe._f = 0
-#    on_probe._f += 1
-#    if on_probe._f % 30 == 0:
-#        labels_seen = {}
-#        for d in objs[:10]:
-#            lbl = d.get_label() or "<none>"
-#            labels_seen[lbl] = labels_seen.get(lbl, 0) + 1
-#        print(f"[dbg] dets={len(objs)} labels={labels_seen}", flush=True)
-#
-#    if not objs:
-#        return Gst.PadProbeReturn.OK
-#
-#    # choose largest bbox
-#    best = None; best_area = -1.0
-#    for det in objs:
-#        b = det.get_bbox()
-#        area = float(b.width) * float(b.height)
-#        if area > best_area:
-#            best_area = area; best = b
-#
-#    if best:
-#        cx = (best.x + 0.5 * best.width) / float(fw)
-#        cx = 0.0 if cx < 0 else (1.0 if cx > 1.0 else cx)
-#        # EMA smoothing
-#        global ema_cx
-#        ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
-#        print(f"{ema_cx:.4f}", flush=True)
-#
-#    return Gst.PadProbeReturn.OK
-
-
-#def on_probe(pad, info):
-#    import hailo
-#    buf = info.get_buffer()
-#    if not buf:
-#        return Gst.PadProbeReturn.OK
-#
-#    # Get frame size from negotiated caps on this pad
-#    caps = pad.get_current_caps() or pad.get_allowed_caps()
-#    try:
-#        s = caps.get_structure(0)
-#        fw = s.get_value('width')
-#        fh = s.get_value('height')
-#        fw = int(fw) if fw is not None else None
-#        fh = int(fh) if fh is not None else None
-#    except Exception:
-#        fw = fh = None
-#
-#    try:
-#        roi = hailo.get_roi_from_buffer(buf)
-#    except Exception:
-#        return Gst.PadProbeReturn.OK
-#
-#    # Fall back if caps didn't give us dims (shouldn’t happen)
-#    if not fw or not fh:
-#        try:
-#            # some builds expose roi.get_stream_info().get_width()/get_height()
-#            si = roi.get_stream_info()
-#            fw = fw or int(getattr(si, 'get_width')())
-#            fh = fh or int(getattr(si, 'get_height')())
-#        except Exception:
-#            return Gst.PadProbeReturn.OK
-#
-#    # Pick largest "person" and emit normalized cx
-#    global ema_cx
-#    best = None; best_area = -1.0
-#    for det in roi.get_objects_typed(hailo.HAILO_DETECTION):
-#        if det.get_label() != "person":
-#            continue
-#        b = det.get_bbox()  # has x,y,width,height in pixels
-#        area = float(b.width) * float(b.height)
-#        if area > best_area:
-#            best_area, best = area, b
-#
-#    if best:
-#        cx = (best.x + 0.5*best.width) / float(fw)
-#        cx = 0.0 if cx < 0 else (1.0 if cx > 1.0 else cx)
-#        ema_cx = cx if ema_cx is None else (ALPHA*cx + (1-ALPHA)*ema_cx)
-#        print(f"{ema_cx:.4f}", flush=True)
-#
-#    return Gst.PadProbeReturn.OK
 
 
 def mk(name):
@@ -231,7 +129,7 @@ def main():
     hailo_filt = mk("hailofilter")
     hailo_filt.set_property("function-name", "yolov8s")
     hailo_filt.set_property("so-path", "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so")
-    hailo_filt.set_property("config-path", "/home/pi/yolo_person.json")
+    hailo_filt.set_property("config-path", "/home/pi/hailo-rpi5-examples/yolo_person.json")
 
     sink = mk("fakesink"); sink.set_property("sync", False)
 

@@ -8,7 +8,6 @@ CAMERA = "/dev/video0"
 HEF = "/usr/local/hailo/resources/models/hailo8l/yolov8s.hef"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 
-PERSON = "person"
 ALPHA = 0.25
 ema_cx = None
 
@@ -78,6 +77,9 @@ def on_probe(pad, info):
     best = None; best_area = -1.0
     for det in objs:
         try:
+            label = getattr(det, "get_label", lambda: "")()
+            if label != "person":
+                continue
             b = det.get_bbox()
             x, y, w, h = _bbox_xywh(b)
             print(f"[x] {x} {y} {h} {w}")
@@ -91,9 +93,10 @@ def on_probe(pad, info):
         global ema_cx
         x, y, w, h = best
         cx = (x + 0.5 * w)
-        ALPHA = 0.25
         ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
         print(f"{ema_cx:.4f}", flush=True)
+    else:
+        print("-1.0", flush=True)
 
     return Gst.PadProbeReturn.OK
 

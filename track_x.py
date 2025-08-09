@@ -38,8 +38,8 @@ def _first(obj, names, default=None):
 
 def _bbox_xywh(b):
     # Try direct x/y/w/h
-    x = _first(b, ["x", "get_x", "xmin", "get_xmin", "x_min", "get_x_min", "left", "get_left"])
-    y = _first(b, ["y", "get_y", "ymin", "get_ymin", "y_min", "get_y_min", "top", "get_top"])
+    x = _first(b, ["xmin", "x", "get_x", "xmin", "get_xmin", "x_min", "get_x_min", "left", "get_left"])
+    y = _first(b, ["ymin", "y", "get_y", "ymin", "get_ymin", "y_min", "get_y_min", "top", "get_top"])
     # Prefer width/height if present; else derive from right/bottom
     w = _first(b, ["width", "get_width", "w", "get_w"], default=None)
     h = _first(b, ["height", "get_height", "h", "get_h"], default=None)
@@ -79,9 +79,8 @@ def on_probe(pad, info):
     for det in objs:
         try:
             b = det.get_bbox()
-            print("[det]", det, flush=True)
-            print("[b]", b, flush=True)
             x, y, w, h = _bbox_xywh(b)
+            print(f"[x] {x} {y} {h} {w}")
             area = w * h
             if area > best_area:
                 best_area, best = area, (x, y, w, h)
@@ -91,8 +90,7 @@ def on_probe(pad, info):
     if best:
         global ema_cx
         x, y, w, h = best
-        cx = (x + 0.5 * w) / float(fw)
-        cx = 0.0 if cx < 0 else (1.0 if cx > 1.0 else cx)
+        cx = (x + 0.5 * w)
         ALPHA = 0.25
         ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
         print(f"{ema_cx:.4f}", flush=True)

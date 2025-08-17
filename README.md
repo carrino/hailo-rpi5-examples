@@ -1,3 +1,17 @@
+# carrino haloween eyes
+
+add this to /boot/firmware/config.txt
+```bash
+dtoverlay=pwm-2chan
+```
+
+debug
+```bash
+sudo cat /sys/kernel/debug/pwm  # pwm-2   (sysfs): requested enabled period: 1000000 ns duty: 500000 ns polarity: normal
+pinctrl  | grep pwm -i # we use pin 12 which is gpio18 18: a3    pd | hi // GPIO18 = PWM0_CHAN2
+```
+
+
 
 ![Banner](doc/images/hailo_rpi_examples_banner.png)
 

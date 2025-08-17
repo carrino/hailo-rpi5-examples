@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
+
 import gi, sys
 gi.require_version('Gst', '1.0')
+
 from gi.repository import Gst
 Gst.init(None)
+
+from rpi_hardware_pwm import HardwarePWM
+
+pwm = HardwarePWM(pwm_channel=2, hz=10000, chip=0)
 
 CAMERA = "/dev/video0"
 HEF = "/usr/local/hailo/resources/models/hailo8l/yolov8s.hef"
@@ -10,6 +16,10 @@ SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 
 ALPHA = 0.25
 ema_cx = None
+
+def set_pos01(pin, pos):
+    pos = 0.0 if pos < 0 else (1.0 if pos > 1.0 else pos)
+    pi.hardware_PWM(pin, 1000, int(pos * 1_000_000))
 
 # add this helper near the top of your file
 def _get(obj, *names):
@@ -84,7 +94,7 @@ def on_probe(pad, info):
             x, y, w, h = _bbox_xywh(b)
             c = getattr(det, "get_confidence", lambda: None)()
             print(f"[x] {x} {y} {h} {w} {c}")
-            if c < 0.3:
+            if c < 0.35:
                 continue
             area = w * h
             if area > best_area:
@@ -97,6 +107,7 @@ def on_probe(pad, info):
         x, y, w, h = best
         cx = (x + 0.5 * w)
         ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
+        pwm.change_duty_cycle(float(ema_cx * 100.0))
         print(f"{ema_cx:.4f}", flush=True)
     else:
         print("-1.0", flush=True)
@@ -117,6 +128,8 @@ def link_chain(elems):
             sys.exit(1)
 
 def main():
+    pwm.start(50)
+
     # elements matching the pipeline that linked for you
     src = mk("v4l2src"); src.set_property("device", CAMERA); src.set_property("io-mode", 2); src.set_property("do-timestamp", True)
     caps_mjpg = mk("capsfilter"); caps_mjpg.set_property("caps", Gst.Caps.from_string("image/jpeg,width=640,height=480,framerate=30/1"))
@@ -159,6 +172,7 @@ def main():
         pass
     finally:
         pipe.set_state(Gst.State.NULL)
+        pwm.stop()
 
 if __name__ == "__main__":
     main()

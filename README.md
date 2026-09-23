@@ -11,6 +11,26 @@ sudo cat /sys/kernel/debug/pwm  # pwm-2   (sysfs): requested enabled period: 100
 pinctrl  | grep pwm -i # we use pin 12 which is gpio18 18: a3    pd | hi // GPIO18 = PWM0_CHAN2
 ```
 
+see what the camera sees (open http://raspberrypi.local:8080/ on a phone/laptop on the same wifi)
+```bash
+./track.sh --debug-port 8080                       # live view: boxes, cx grid, magenta line = where the eyes aim
+./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
+```
+green box = person being tracked, yellow = other person, red = below MIN_CONFIDENCE
+
+calibrate the eyes (tracking is off, you type duty cycles)
+```bash
+./track.sh --calibrate --debug-port 8080
+```
+stand near the left side of the view, read your cx off the grid, type duty values until the eyes look at you, write down (cx, duty).
+repeat near the right side (and the middle if it's not linear). put the pairs in `CALIBRATION` in track_x.py.
+
+ssh
+```bash
+ssh pi@raspberrypi.local        # or ssh pi@<ip>, find the ip with `hostname -I` on the pi
+ssh-copy-id pi@raspberrypi.local # once, so you don't need a password
+```
+
 
 
 ![Banner](doc/images/hailo_rpi_examples_banner.png)

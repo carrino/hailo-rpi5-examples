@@ -27,6 +27,11 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
 ./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
 ```
+./track.sh --model yolov8m                         # bigger detector: sees small/far people better, ~half the fps
+```
+people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
+reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3) is what gets followed. red boxes on the page are the
+band in between: if real people show up red, lower MIN_CONFIDENCE; if bushes show up red, don't.
 the model always gets 640x640 whatever the capture size is, so a bigger capture costs the Hailo nothing
 (only some CPU for jpeg decode). `v4l2-ctl -d /dev/video0 --list-formats-ext` lists what the camera offers.
 green box = person being tracked, yellow = other person, red = below MIN_CONFIDENCE

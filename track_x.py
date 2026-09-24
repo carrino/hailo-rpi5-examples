@@ -18,11 +18,14 @@ pwm = HardwarePWM(pwm_channel=2, hz=10000, chip=0)
 CAMERA = "/dev/video0"
 CAMERA_SIZE = (1280, 720)   # MJPEG capture size; --camera-size WxH. The model always gets 640x640.
                             # 16:9 is a noticeably wider view than 640x480 on this camera.
-HEF = "/usr/local/hailo/resources/models/hailo8l/yolov8s.hef"
+MODEL = "yolov8s"   # --model yolov8m sees small (far away) people better, at ~half the fps
+HEF_DIR = "/usr/local/hailo/resources/models/hailo8l"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 
 ALPHA = 0.25
-MIN_CONFIDENCE = 0.35
+# Below this a detection is shown as a red box but not followed. yolo_person.json's
+# detection_threshold is the hard floor: nothing under it reaches this code at all.
+MIN_CONFIDENCE = 0.3
 ema_cx = None
 
 # Maps where the person is in the camera image to where the eyes should point.
@@ -494,6 +497,8 @@ def main():
     ap.add_argument("--save-every", type=float, default=1.0, help="seconds between saved frames (default 1)")
     ap.add_argument("--calibrate", action="store_true",
                     help="don't track; set the duty cycle by typing numbers so you can build CALIBRATION")
+    ap.add_argument("--model", default=MODEL, choices=["yolov8s", "yolov8m"],
+                    help=f"detector; bigger ones see small/far people better but run slower (default {MODEL})")
     ap.add_argument("--camera-size", default=f"{CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}",
                     help="MJPEG capture size, e.g. 1280x720 (see v4l2-ctl --list-formats-ext). "
                          f"The model still gets 640x640. Default {CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}")
@@ -531,9 +536,14 @@ def main():
     vscale = mk("videoscale")
     caps_rgb_sq = mk("capsfilter"); caps_rgb_sq.set_property("caps", Gst.Caps.from_string("video/x-raw,format=RGB,width=640,height=640"))
     q = mk("queue"); q.set_property("max-size-buffers", 3); q.set_property("leaky", 2)
-    hailo_net = mk("hailonet"); hailo_net.set_property("hef-path", HEF)
+    hef = os.path.join(HEF_DIR, f"{args.model}.hef")
+    if not os.path.exists(hef):
+        print(f"no such model file: {hef} (run ./download_resources.sh --all, or pick another --model)", file=sys.stderr)
+        sys.exit(1)
+    print(f"model {args.model} ({hef}), capture {CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}", flush=True)
+    hailo_net = mk("hailonet"); hailo_net.set_property("hef-path", hef)
     hailo_filt = mk("hailofilter")
-    hailo_filt.set_property("function-name", "yolov8s")
+    hailo_filt.set_property("function-name", args.model)
     hailo_filt.set_property("so-path", "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so")
     hailo_filt.set_property("config-path", "/home/pi/hailo-rpi5-examples/yolo_person.json")
 

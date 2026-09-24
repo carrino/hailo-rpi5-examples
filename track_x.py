@@ -46,12 +46,15 @@ MIN_CONFIDENCE = 0.3
 # person at 40ft is still ~0.03 wide when fully in view.
 EDGE_MIN_WIDTH = 0.03
 ema_cx = None
-# With nobody in view for IDLE_AFTER seconds the eyes look around on their own: a slow sweep
-# between IDLE_RANGE (in cx, so it goes through the calibration like a person would), one
-# round trip every IDLE_PERIOD seconds (8 s each way). Anyone showing up takes over at once. Off while the
-# eyes are held from the page. --idle-after 0 turns it off.
+# With nobody in view for IDLE_AFTER seconds the eyes look around on their own: a slow,
+# eased look from one end of IDLE_RANGE to the other (in cx, so it goes through the
+# calibration like a person would) taking IDLE_MOVE seconds, then IDLE_REST seconds still,
+# then a look back. Gentle on the actuator: tracking a person moves it far faster. Anyone
+# showing up takes over at once. Off while the eyes are held from the page.
+# --idle-after 0 turns it off.
 IDLE_AFTER = 15.0
-IDLE_PERIOD = 16.0
+IDLE_MOVE = 16.0
+IDLE_REST = 15.0
 IDLE_RANGE = (0.1, 0.9)
 last_seen = time.time()   # when a person was last followed
 idle = False              # looking around right now
@@ -296,29 +299,34 @@ def dedupe(dets, overlap=0.6):
 
 
 def idle_loop(after):
-    """With nobody around for `after` seconds, look around: sweep slowly between IDLE_RANGE
-    until someone shows up (on_probe bumps last_seen, which stops this within a tick)."""
+    """With nobody around for `after` seconds, look around: ease from one end of IDLE_RANGE
+    to the other over IDLE_MOVE seconds, rest IDLE_REST seconds, look back, and so on, until
+    someone shows up (on_probe bumps last_seen, which stops this within a tick)."""
     global ema_cx, idle
     lo, hi = IDLE_RANGE
-    mid, amp = (lo + hi) / 2, (hi - lo) / 2
-    phase = 0.0
-    t_prev = time.time()
+    start = target = None; t0 = 0.0; rest_until = None
     while True:
         time.sleep(0.05)
         now = time.time()
         if calibrating or now - last_seen < after:
             idle = False
-            t_prev = now
             continue
         if not idle:
-            # pick up the sweep from wherever the eyes are so they don't jump
-            here = ema_cx if ema_cx is not None else mid
-            phase = math.asin(max(-1.0, min(1.0, (here - mid) / amp)))
+            # pick up from wherever the eyes are, heading for the farther end
             idle = True
-        phase += 2 * math.pi * (now - t_prev) / IDLE_PERIOD
-        t_prev = now
-        ema_cx = mid + amp * math.sin(phase)
+            start = ema_cx if ema_cx is not None else (lo + hi) / 2
+            target = hi if hi - start >= start - lo else lo
+            t0 = now; rest_until = None
+        if rest_until is not None:
+            if now < rest_until:
+                continue
+            start, target, t0, rest_until = ema_cx, (lo if target == hi else hi), now, None
+        move = IDLE_MOVE * abs(target - start) / (hi - lo)   # full range takes IDLE_MOVE
+        f = 1.0 if move <= 0 else min(1.0, (now - t0) / move)
+        ema_cx = start + (target - start) * (0.5 - 0.5 * math.cos(math.pi * f))   # eased
         set_duty(cx_to_duty(ema_cx))
+        if f >= 1.0:
+            rest_until = now + IDLE_REST
 
 
 def debug_wanted():

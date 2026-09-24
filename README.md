@@ -38,10 +38,10 @@ per frame, round robin. the Hailo load is one inference per frame either way, bu
 every Nth frame so the eyes update slower. someone standing in the overlap is seen by two tiles; the clipped
 box is merged into the full one. off by default: the squashed frame is fine in daylight. the page
 draws the tiles when they're on.
-with nobody in view for `IDLE_AFTER` seconds (15) the eyes look around on their own: a slow sweep across
-`IDLE_RANGE` (cx 0.1 to 0.9, through the calibration), `IDLE_PERIOD` seconds (16) per round trip, 8 each way. it starts from
-wherever the eyes are, stops the moment someone is seen, and the header/page say LOOKING AROUND / LOOK. holding
-the eyes from the page also stops it.
+with nobody in view for `IDLE_AFTER` seconds (15) the eyes look around on their own: an eased look from one
+end of `IDLE_RANGE` (cx 0.1 to 0.9, through the calibration) to the other taking `IDLE_MOVE` seconds (16), then
+`IDLE_REST` seconds (15) still, then a look back. it starts from wherever the eyes are, stops the moment someone
+is seen, and the header/page say LOOKING AROUND / LOOK. holding the eyes from the page also stops it.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
 reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3) is what gets followed. red boxes on the page are the
 band in between: if real people show up red, lower MIN_CONFIDENCE; if bushes show up red, don't.

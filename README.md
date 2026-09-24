@@ -25,7 +25,7 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ./track.sh                                         # same as at boot; view on :8080
 ./track.sh --debug-port 0                          # turn the view off
 ./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
-./track.sh --camera-size 1280x720                  # try a 16:9 capture; often a wider view than 640x480
+./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
 ```
 the model always gets 640x640 whatever the capture size is, so a bigger capture costs the Hailo nothing
 (only some CPU for jpeg decode). `v4l2-ctl -d /dev/video0 --list-formats-ext` lists what the camera offers.

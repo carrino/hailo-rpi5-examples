@@ -16,7 +16,8 @@ from rpi_hardware_pwm import HardwarePWM
 pwm = HardwarePWM(pwm_channel=2, hz=10000, chip=0)
 
 CAMERA = "/dev/video0"
-CAMERA_SIZE = (640, 480)   # MJPEG capture size; --camera-size WxH. The model always gets 640x640.
+CAMERA_SIZE = (1280, 720)   # MJPEG capture size; --camera-size WxH. The model always gets 640x640.
+                            # 16:9 is a noticeably wider view than 640x480 on this camera.
 HEF = "/usr/local/hailo/resources/models/hailo8l/yolov8s.hef"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 

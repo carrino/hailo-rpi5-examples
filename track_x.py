@@ -118,7 +118,8 @@ tile_height = 0
 band_w = 0                 # width of the band after scaling to 640 tall
 tile_rr = 0                # which tile the next frame gets
 tile_of_pts = {}           # buffer pts -> tile index, set at the crop, read after the model
-tile_dets = {}             # tile index -> (time, [(x, y, w, h, c)] in full-frame coords)
+tile_dets = {}             # tile index -> (time, [(x, y, w, h, c)] in full-frame coords, the ones confirmed)
+tile_seen = {}             # tile index -> (time, dets) from the previous look at that tile
 crop = None                # the videocrop element
 last_full_frame = None     # latest full RGB frame, only copied while the debug view is watched
 
@@ -274,10 +275,21 @@ def on_probe(pad, info):
 
     # combine with the other tiles' latest results. A person standing in the overlap is seen
     # by two tiles (one of them clipped), so drop boxes that mostly sit inside a bigger one.
+    # With tiles, a box has to turn up in two looks at the same tile in a row before it is
+    # followed: one tile's result is carried until its next look, so the per-frame debounce
+    # below can't tell a one-look phantom from a person. Unconfirmed boxes are still drawn.
     now = time.time()
-    tile_dets[k] = (now, dets)
-    dets = [d for (t, ds) in tile_dets.values() if now - t < 0.25 for d in ds]
     if len(tile_lefts) > 1:
+        t_prev, prev = tile_seen.get(k, (0.0, []))
+        tile_seen[k] = (now, dets)
+        ok = [d for d in dets if now - t_prev < 1.0 and any(_overlap(d, q) for q in prev)]
+    else:
+        ok = dets
+    tile_dets[k] = (now, dets, ok)
+    dets_all = [d for (t, ds, _) in tile_dets.values() if now - t < 0.25 for d in ds]
+    dets = [d for (t, _, oks) in tile_dets.values() if now - t < 0.25 for d in oks]
+    if len(tile_lefts) > 1:
+        dets_all = dedupe(dets_all)
         dets = dedupe(dets)
 
     # follow the largest confident person
@@ -328,7 +340,7 @@ def on_probe(pad, info):
         elif log_frames:
             print("-1.0", flush=True)
 
-    publish_debug(frame, dets, best if present else None)
+    publish_debug(frame, dets_all, best if present else None)
     return Gst.PadProbeReturn.OK
 
 
@@ -370,6 +382,13 @@ def start_coast(now):
             stop = hi + 0.03 if v > 0 else lo - 0.03
             return (v, now, stop, now + min(8.0, abs(stop - here) / abs(v)) + 0.5)
     return (v, now, None, now + COAST_MAX)
+
+
+def _overlap(a, b, frac=0.3):
+    """Do two boxes share at least `frac` of the smaller one's area?"""
+    iw = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+    ih = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+    return iw > 0 and ih > 0 and iw * ih >= frac * min(a[2] * a[3], b[2] * b[3])
 
 
 def dedupe(dets, overlap=0.6):

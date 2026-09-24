@@ -329,16 +329,23 @@ def start_coast(now):
     """The person just vanished. If they were walking at a steady pace, return how to keep the
     eyes going: (speed in cx/s, now, cx to stop at or None, time to give up)."""
     if len(track_hist) < 6 or now - track_hist[-1][0] > 0.5:
+        if log_frames:
+            print(f"no coast: {len(track_hist)} samples, last {now - track_hist[-1][0]:.2f}s ago", flush=True)
         return None
     t0 = track_hist[0][0]
     ts = [t - t0 for t, _, _ in track_hist]
     if ts[-1] < 0.3:
+        if log_frames:
+            print(f"no coast: only {ts[-1]:.2f}s of track", flush=True)
         return None
     # the steadiest of centre / left edge / right edge: an edge being eaten by an obstacle,
     # or still pinned to the one they just came out from, is the odd one out
     v, err = min((_fit(ts, [x + f * w for _, x, w in track_hist]) for f in (0.5, 0.0, 1.0)),
                  key=lambda fe: fe[1])
     if abs(v) < COAST_MIN_SPEED or err > COAST_MAX_ERR:
+        if log_frames:
+            print(f"no coast: speed {v:+.3f}/s err {err:.3f} at cx {track_hist[-1][1] + 0.5 * track_hist[-1][2]:.2f}",
+                  flush=True)
         return None
     _, x, w = track_hist[-1]
     here = x + 0.5 * w

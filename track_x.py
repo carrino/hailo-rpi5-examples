@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
-import argparse, gi, os, sys, threading, time
+import argparse, gi, json, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit, parse_qs
 gi.require_version('Gst', '1.0')
 
 import cv2
@@ -26,9 +27,13 @@ ema_cx = None
 # Each pair is (cx, duty): cx is the person's center in the image (0.0 = left edge,
 # 1.0 = right edge), duty is the PWM duty cycle (0-100) that aims the eyes at them.
 # Between pairs the duty is linearly interpolated; outside them it is extrapolated
-# from the nearest pair. Use --calibrate to find these. The default is the original
-# duty = cx * 100 behavior. Swap the duties to flip direction.
+# from the nearest pair. The default is the original duty = cx * 100 behavior. Swap
+# the duties to flip direction. Tune it from the debug page: hold the eyes, nudge the
+# duty until they look at you, tap Mark, repeat at a few spots, then Apply. That writes
+# CALIB_FILE, which overrides this list at startup.
 CALIBRATION = [(0.0, 0.0), (1.0, 100.0)]
+CALIB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
+MARK_DIR = os.path.expanduser("~/eyes_marks")   # a snapshot per Mark, to review later
 # Hard limits so a bad calibration can't drive the eyes past their mechanical range.
 DUTY_MIN = 0.0
 DUTY_MAX = 100.0
@@ -40,6 +45,7 @@ calibrating = False
 log_frames = True
 save_enabled = False
 debug_last_request = 0.0   # when a viewer last asked for a frame
+marks = []   # (cx, duty) checkpoints recorded from the debug page this session
 
 # Latest frame + detections, shared from the GStreamer probe to the debug view/saver threads.
 debug_lock = threading.Lock()
@@ -56,6 +62,36 @@ def cx_to_duty(cx):
         i += 1
     (x0, d0), (x1, d1) = pts[i - 1], pts[i]
     return d0 + (cx - x0) * (d1 - d0) / (x1 - x0)
+
+def load_calibration():
+    global CALIBRATION
+    try:
+        with open(CALIB_FILE) as f:
+            pts = [(float(cx), float(d)) for cx, d in json.load(f)]
+    except FileNotFoundError:
+        return False
+    except Exception as e:
+        print(f"ignoring {CALIB_FILE}: {e}", flush=True)
+        return False
+    if pts:
+        CALIBRATION = sorted(pts)
+        print(f"calibration from {CALIB_FILE}: {CALIBRATION}", flush=True)
+        return True
+    return False
+
+def save_calibration(pts):
+    global CALIBRATION
+    CALIBRATION = sorted(pts)
+    with open(CALIB_FILE, "w") as f:
+        json.dump(CALIBRATION, f)
+
+def reset_calibration():
+    global CALIBRATION
+    CALIBRATION = [(0.0, 0.0), (1.0, 100.0)]
+    try:
+        os.remove(CALIB_FILE)
+    except FileNotFoundError:
+        pass
 
 def set_duty(duty):
     global current_duty
@@ -216,7 +252,11 @@ def render(snap):
             color = (0, 0, 255)
         p1 = (int(x * W), int(y * H)); p2 = (int((x + w) * W), int((y + h) * H))
         cv2.rectangle(img, p1, p2, color, 2)
-        cv2.putText(img, f"{c:.2f}" if c is not None else "?", (p1[0] + 2, p1[1] + 16), font, 0.5, color, 1)
+        label = f"{c:.2f}" if c is not None else "?"
+        if best and (x, y, w, h) == best:
+            bcx = x + 0.5 * w
+            label += f" cx={bcx:.2f} -> {cx_to_duty(bcx):.0f}"
+        cv2.putText(img, label, (p1[0] + 2, p1[1] + 16), font, 0.5, color, 1)
 
     if best:
         X = int((best[0] + 0.5 * best[2]) * W)
@@ -225,9 +265,18 @@ def render(snap):
         X = int(ema * W)
         cv2.line(img, (X, 0), (X, H), (255, 0, 255), 3)
 
+    # recorded checkpoints, as ticks along the bottom edge
+    for (mcx, mduty) in marks:
+        X = int(mcx * W)
+        cv2.line(img, (X, H - 18), (X, H), (255, 200, 0), 2)
+        cv2.putText(img, f"{mduty:.0f}", (X + 3, H - 20), font, 0.4, (255, 200, 0), 1)
+
     ema_txt = f"{ema:.3f}" if ema is not None else "-"
-    mode = "CALIBRATE " if calibrating else ""
-    text = f"{mode}eyes cx={ema_txt} duty={duty:.1f} people={len(dets)}"
+    if calibrating:
+        want = f" calib says {cx_to_duty(ema):.1f}" if ema is not None else ""
+        text = f"HOLD duty={duty:.1f}{want} cx={ema_txt} people={len(dets)}"
+    else:
+        text = f"eyes cx={ema_txt} duty={duty:.1f} people={len(dets)}"
     cv2.putText(img, text, (8, 22), font, 0.6, (0, 0, 0), 4)
     cv2.putText(img, text, (8, 22), font, 0.6, (255, 255, 255), 1)
     return img
@@ -249,15 +298,110 @@ def latest_jpeg():
         return debug_jpeg
 
 
+PAGE_HTML = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eyes</title>
+<style>
+ body{margin:0;background:#111;color:#eee;font:15px system-ui,sans-serif}
+ img{width:100%;display:block}
+ #st{padding:8px 12px;font-family:ui-monospace,monospace;white-space:pre-wrap}
+ .row{display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px;align-items:center}
+ button{font:inherit;padding:10px 14px;border:0;border-radius:6px;background:#333;color:#eee}
+ button.on{background:#c60}
+ button.go{background:#2a7}
+ input{font:inherit;width:5em;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#eee}
+ .pairs{padding:0 12px 12px;font-family:ui-monospace,monospace;font-size:13px;color:#bbb}
+</style></head><body>
+<img src="/stream">
+<div id="st">connecting...</div>
+<div class="row">
+ <button id="hold" onclick="post('/calibrate?on='+(S.calibrating?0:1))">Hold eyes</button>
+ <button onclick="post('/duty?delta=-5')">-5</button><button onclick="post('/duty?delta=-1')">-1</button>
+ <button onclick="post('/duty?delta=1')">+1</button><button onclick="post('/duty?delta=5')">+5</button>
+ <input id="d" type="number" step="0.5" min="0" max="100"><button onclick="post('/duty?value='+document.getElementById('d').value)">Set</button>
+</div>
+<div class="row">
+ <button class="go" onclick="post('/mark')">Mark (cx, duty)</button>
+ <button onclick="post('/marks/clear')">Clear marks</button>
+ <button class="go" onclick="if(confirm('Use the marks as the calibration and save it?'))post('/calibration/apply')">Apply marks</button>
+ <button onclick="if(confirm('Back to duty = cx*100?'))post('/calibration/reset')">Reset calibration</button>
+</div>
+<div class="pairs" id="pairs"></div>
+<script>
+let S={};
+function post(u){fetch(u,{method:'POST'}).then(r=>r.text()).then(t=>{if(t&&t!='ok')alert(t);poll();});}
+function poll(){fetch('/status').then(r=>r.json()).then(s=>{S=s;
+ const cx=s.cx==null?'-':s.cx.toFixed(3);
+ document.getElementById('st').textContent=(s.calibrating?'HOLD  ':'TRACK ')+'cx='+cx+'  duty='+s.duty.toFixed(1)
+   +(s.cx!=null?'  calib says '+s.predicted.toFixed(1):'')+'  people='+s.people;
+ document.getElementById('hold').className=s.calibrating?'on':'';
+ document.getElementById('hold').textContent=s.calibrating?'Holding (tap to track)':'Hold eyes';
+ document.getElementById('pairs').textContent='marks: '+JSON.stringify(s.marks.map(p=>[+p[0].toFixed(3),+p[1].toFixed(1)]))
+   +'\ncalibration: '+JSON.stringify(s.calibration.map(p=>[+p[0].toFixed(3),+p[1].toFixed(1)]))+(s.calib_file?'  (saved)':'  (default)');
+}).catch(()=>{});}
+setInterval(poll,500);poll();
+</script></body></html>"""
+
+def status_json():
+    return json.dumps({
+        "cx": ema_cx, "duty": current_duty, "calibrating": calibrating,
+        "predicted": cx_to_duty(ema_cx) if ema_cx is not None else None,
+        "people": len(debug_snap[1]) if debug_snap else 0,
+        "marks": marks, "calibration": CALIBRATION,
+        "calib_file": os.path.exists(CALIB_FILE),
+    }).encode()
+
 class DebugHandler(BaseHTTPRequestHandler):
+    def reply(self, body, ctype="text/plain", code=200):
+        if isinstance(body, str):
+            body = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        global calibrating, marks
+        url = urlsplit(self.path)
+        q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        try:
+            if url.path == "/calibrate":
+                calibrating = q.get("on", "1") == "1"
+            elif url.path == "/duty":
+                calibrating = True   # nudging the eyes only makes sense if tracking isn't fighting you
+                set_duty(current_duty + float(q["delta"]) if "delta" in q else float(q["value"]))
+            elif url.path == "/mark":
+                if ema_cx is None:
+                    return self.reply("nobody in view to mark", code=400)
+                marks = marks + [(round(ema_cx, 4), round(current_duty, 2))]
+                _, jpg = latest_jpeg()
+                if jpg:
+                    os.makedirs(MARK_DIR, exist_ok=True)
+                    name = time.strftime("%Y%m%d-%H%M%S") + f"-cx{ema_cx:.3f}-duty{current_duty:.1f}.jpg"
+                    with open(os.path.join(MARK_DIR, name), "wb") as f:
+                        f.write(jpg)
+                print(f"mark ({ema_cx:.4f}, {current_duty:.2f})", flush=True)
+            elif url.path == "/marks/clear":
+                marks = []
+            elif url.path == "/calibration/apply":
+                if not marks:
+                    return self.reply("no marks yet", code=400)
+                save_calibration(marks)
+                print(f"calibration saved to {CALIB_FILE}: {CALIBRATION}", flush=True)
+            elif url.path == "/calibration/reset":
+                reset_calibration()
+            else:
+                return self.send_error(404)
+        except (KeyError, ValueError) as e:
+            return self.reply(f"bad request: {e}", code=400)
+        self.reply("ok")
+
     def do_GET(self):
         if self.path == "/":
-            body = b"<html><body style='margin:0;background:#000'><img src='/stream' style='width:100%'></body></html>"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.reply(PAGE_HTML, "text/html; charset=utf-8")
+        elif self.path == "/status":
+            self.reply(status_json(), "application/json")
         elif self.path == "/snapshot.jpg":
             _, jpg = latest_jpeg()
             if jpg is None:
@@ -345,6 +489,7 @@ def main():
     log_frames = not args.calibrate
     save_enabled = args.save_dir is not None
 
+    load_calibration()
     pwm.start(current_duty)
 
     if args.debug_port:

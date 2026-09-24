@@ -28,12 +28,16 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ```
 green box = person being tracked, yellow = other person, red = below MIN_CONFIDENCE
 
-calibrate the eyes (tracking is off, you type duty cycles)
-```bash
-./track.sh --calibrate
-```
-stand near the left side of the view, read your cx off the grid, type duty values until the eyes look at you, write down (cx, duty).
-repeat near the right side (and the middle if it's not linear). put the pairs in `CALIBRATION` in track_x.py.
+tune where the eyes point, from the phone page (http://ai.local:8080/):
+1. tap **Hold eyes** so tracking stops fighting you
+2. stand somewhere, wait for the green box, use the -5/-1/+1/+5 buttons until the eyes look at you
+3. tap **Mark (cx, duty)**. repeat at a few spots across the view (left, middle, right)
+4. tap **Apply marks**: the marks become the calibration, saved to calibration.json (loaded at boot,
+   overrides CALIBRATION in track_x.py). **Reset calibration** goes back to duty = cx*100.
+
+the header shows the cx it sees and the duty it sent; in hold mode it also shows what the
+current calibration would send, so you can see how far off it is. each Mark also saves a
+snapshot to ~/eyes_marks/. the old stdin way still exists: `./track.sh --calibrate`.
 
 ssh
 ```bash

@@ -66,12 +66,14 @@ idle = False              # looking around right now
 # error under COAST_MAX_ERR) or the eyes just stop. Coasting lasts COAST_MAX seconds, or if
 # they vanished at one of the BLOCKED spans of the frame (cx ranges of things that hide
 # people, drawn on the page) until they should have come out the other side. Someone
-# reappearing takes over at once. The pace is measured on the trailing edge of the box and
-# "at a blocked span" means the box touches it: as someone walks behind the tree their
-# leading edge goes first, the box shrinks and its centre stalls, and the detection drops
-# before the centre ever gets there.
-COAST_FIT = 1.0
-COAST_MIN_SPEED = 0.05
+# reappearing takes over at once. The pace is measured on whichever of the box's centre,
+# left or right edge moves most steadily, and "at a blocked span" means the box touches it:
+# walking behind the tree the leading edge goes first, the box shrinks and its centre stalls,
+# and the detection drops before the centre gets there; coming out from behind a trellis the
+# trailing edge stays pinned to it until they are clear. The window is short so those
+# clipped frames age out quickly between one obstacle and the next.
+COAST_FIT = 0.5
+COAST_MIN_SPEED = 0.03
 COAST_MAX_ERR = 0.04
 COAST_MAX = 3.0
 BLOCKED = [(0.14, 0.19), (0.29, 0.34), (0.49, 0.71)]   # trellis, trellis, tree (1280x720 view)
@@ -330,14 +332,12 @@ def start_coast(now):
         return None
     t0 = track_hist[0][0]
     ts = [t - t0 for t, _, _ in track_hist]
-    if ts[-1] < 0.4:
+    if ts[-1] < 0.3:
         return None
-    # which way: from the centres. Then the pace from the trailing edge, which stays in view
-    # while the leading edge disappears behind whatever is hiding them.
-    v, _ = _fit(ts, [x + 0.5 * w for _, x, w in track_hist])
-    if abs(v) < COAST_MIN_SPEED:
-        return None
-    v, err = _fit(ts, [x if v > 0 else x + w for _, x, w in track_hist])
+    # the steadiest of centre / left edge / right edge: an edge being eaten by an obstacle,
+    # or still pinned to the one they just came out from, is the odd one out
+    v, err = min((_fit(ts, [x + f * w for _, x, w in track_hist]) for f in (0.5, 0.0, 1.0)),
+                 key=lambda fe: fe[1])
     if abs(v) < COAST_MIN_SPEED or err > COAST_MAX_ERR:
         return None
     _, x, w = track_hist[-1]

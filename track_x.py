@@ -66,13 +66,16 @@ idle = False              # looking around right now
 # error under COAST_MAX_ERR) or the eyes just stop. Coasting lasts COAST_MAX seconds, or if
 # they vanished at one of the BLOCKED spans of the frame (cx ranges of things that hide
 # people, drawn on the page) until they should have come out the other side. Someone
-# reappearing takes over at once.
+# reappearing takes over at once. The pace is measured on the trailing edge of the box and
+# "at a blocked span" means the box touches it: as someone walks behind the tree their
+# leading edge goes first, the box shrinks and its centre stalls, and the detection drops
+# before the centre ever gets there.
 COAST_FIT = 1.0
 COAST_MIN_SPEED = 0.05
 COAST_MAX_ERR = 0.04
 COAST_MAX = 3.0
 BLOCKED = [(0.14, 0.19), (0.29, 0.34), (0.49, 0.71)]   # trellis, trellis, tree (1280x720 view)
-track_hist = []   # (t, cx) of the followed person over the last COAST_FIT seconds
+track_hist = []   # (t, x, w) of the followed person's box over the last COAST_FIT seconds
 coast = None      # (speed, t_prev, stop_cx, t_max) while dead-reckoning
 
 # Maps where the person is in the camera image to where the eyes should point.
@@ -282,7 +285,7 @@ def on_probe(pad, info):
         x, y, w, h = best
         cx = (x + 0.5 * w)
         ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
-        track_hist.append((now, cx))
+        track_hist.append((now, x, w))
         while track_hist and now - track_hist[0][0] > COAST_FIT:
             track_hist.pop(0)
         coast = None
@@ -311,24 +314,36 @@ def on_probe(pad, info):
     return Gst.PadProbeReturn.OK
 
 
+def _fit(ts, xs):
+    """Least-squares line through (t, x): slope and the worst residual."""
+    n = len(ts); mt = sum(ts) / n; mx = sum(xs) / n
+    sxx = sum((t - mt) ** 2 for t in ts)
+    v = sum((t - mt) * (x - mx) for t, x in zip(ts, xs)) / sxx
+    err = max(abs(x - (mx + v * (t - mt))) for t, x in zip(ts, xs))
+    return v, err
+
+
 def start_coast(now):
     """The person just vanished. If they were walking at a steady pace, return how to keep the
     eyes going: (speed in cx/s, now, cx to stop at or None, time to give up)."""
     if len(track_hist) < 6 or now - track_hist[-1][0] > 0.5:
         return None
     t0 = track_hist[0][0]
-    ts = [t - t0 for t, _ in track_hist]; xs = [x for _, x in track_hist]
+    ts = [t - t0 for t, _, _ in track_hist]
     if ts[-1] < 0.4:
         return None
-    n = len(ts); mt = sum(ts) / n; mx = sum(xs) / n
-    sxx = sum((t - mt) ** 2 for t in ts)
-    v = sum((t - mt) * (x - mx) for t, x in zip(ts, xs)) / sxx
-    err = max(abs(x - (mx + v * (t - mt))) for t, x in zip(ts, xs))
+    # which way: from the centres. Then the pace from the trailing edge, which stays in view
+    # while the leading edge disappears behind whatever is hiding them.
+    v, _ = _fit(ts, [x + 0.5 * w for _, x, w in track_hist])
+    if abs(v) < COAST_MIN_SPEED:
+        return None
+    v, err = _fit(ts, [x if v > 0 else x + w for _, x, w in track_hist])
     if abs(v) < COAST_MIN_SPEED or err > COAST_MAX_ERR:
         return None
-    here = xs[-1]
+    _, x, w = track_hist[-1]
+    here = x + 0.5 * w
     for lo, hi in BLOCKED:
-        if lo - 0.05 <= here <= hi + 0.05:
+        if x <= hi + 0.05 and x + w >= lo - 0.05:   # the box touches the span
             stop = hi + 0.03 if v > 0 else lo - 0.03
             return (v, now, stop, now + min(8.0, abs(stop - here) / abs(v)) + 0.5)
     return (v, now, None, now + COAST_MAX)

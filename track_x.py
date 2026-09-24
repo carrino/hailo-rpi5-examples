@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import argparse, gi, json, os, sys, threading, time
+import argparse, gi, json, math, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 gi.require_version('Gst', '1.0')
@@ -46,6 +46,15 @@ MIN_CONFIDENCE = 0.3
 # person at 40ft is still ~0.03 wide when fully in view.
 EDGE_MIN_WIDTH = 0.03
 ema_cx = None
+# With nobody in view for IDLE_AFTER seconds the eyes look around on their own: a slow sweep
+# between IDLE_RANGE (in cx, so it goes through the calibration like a person would), one
+# round trip every IDLE_PERIOD seconds. Anyone showing up takes over at once. Off while the
+# eyes are held from the page. --idle-after 0 turns it off.
+IDLE_AFTER = 15.0
+IDLE_PERIOD = 8.0
+IDLE_RANGE = (0.1, 0.9)
+last_seen = time.time()   # when a person was last followed
+idle = False              # looking around right now
 
 # Maps where the person is in the camera image to where the eyes should point.
 # Each pair is (cx, duty): cx is the person's center in the image (0.0 = left edge,
@@ -249,7 +258,8 @@ def on_probe(pad, info):
             best_area, best = w * h, (x, y, w, h)
 
     if best:
-        global ema_cx
+        global ema_cx, last_seen
+        last_seen = now
         x, y, w, h = best
         cx = (x + 0.5 * w)
         ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
@@ -283,6 +293,32 @@ def dedupe(dets, overlap=0.6):
         elif c is not None and (kept[dup][4] is None or c > kept[dup][4]):
             kept[dup] = kept[dup][:4] + (c,)
     return kept
+
+
+def idle_loop(after):
+    """With nobody around for `after` seconds, look around: sweep slowly between IDLE_RANGE
+    until someone shows up (on_probe bumps last_seen, which stops this within a tick)."""
+    global ema_cx, idle
+    lo, hi = IDLE_RANGE
+    mid, amp = (lo + hi) / 2, (hi - lo) / 2
+    phase = 0.0
+    t_prev = time.time()
+    while True:
+        time.sleep(0.05)
+        now = time.time()
+        if calibrating or now - last_seen < after:
+            idle = False
+            t_prev = now
+            continue
+        if not idle:
+            # pick up the sweep from wherever the eyes are so they don't jump
+            here = ema_cx if ema_cx is not None else mid
+            phase = math.asin(max(-1.0, min(1.0, (here - mid) / amp)))
+            idle = True
+        phase += 2 * math.pi * (now - t_prev) / IDLE_PERIOD
+        t_prev = now
+        ema_cx = mid + amp * math.sin(phase)
+        set_duty(cx_to_duty(ema_cx))
 
 
 def debug_wanted():
@@ -389,6 +425,8 @@ def render(snap):
     if calibrating:
         want = f" calib says {cx_to_duty(ema):.1f}" if ema is not None else ""
         text = f"HOLD duty={duty:.1f}{want} cx={ema_txt} people={len(dets)}"
+    elif idle:
+        text = f"LOOKING AROUND cx={ema_txt} duty={duty:.1f} people={len(dets)}"
     else:
         text = f"eyes cx={ema_txt} duty={duty:.1f} people={len(dets)}"
     cv2.putText(img, text, (8, 22), font, 0.6, (0, 0, 0), 4)
@@ -447,7 +485,7 @@ let S={};
 function post(u){fetch(u,{method:'POST'}).then(r=>r.text()).then(t=>{if(t&&t!='ok')alert(t);poll();});}
 function poll(){fetch('/status').then(r=>r.json()).then(s=>{S=s;
  const cx=s.cx==null?'-':s.cx.toFixed(3);
- document.getElementById('st').textContent=(s.calibrating?'HOLD  ':'TRACK ')+'cx='+cx+'  duty='+s.duty.toFixed(1)
+ document.getElementById('st').textContent=(s.calibrating?'HOLD  ':s.idle?'LOOK  ':'TRACK ')+'cx='+cx+'  duty='+s.duty.toFixed(1)
    +(s.cx!=null?'  calib says '+s.predicted.toFixed(1):'')+'  people='+s.people;
  document.getElementById('hold').className=s.calibrating?'on':'';
  document.getElementById('hold').textContent=s.calibrating?'Holding (tap to track)':'Hold eyes';
@@ -459,7 +497,7 @@ setInterval(poll,500);poll();
 
 def status_json():
     return json.dumps({
-        "cx": ema_cx, "duty": current_duty, "calibrating": calibrating,
+        "cx": ema_cx, "duty": current_duty, "calibrating": calibrating, "idle": idle,
         "predicted": cx_to_duty(ema_cx) if ema_cx is not None else None,
         "people": len(debug_snap[1]) if debug_snap else 0,
         "marks": marks, "calibration": CALIBRATION,
@@ -601,6 +639,8 @@ def main():
     ap.add_argument("--save-every", type=float, default=1.0, help="seconds between saved frames (default 1)")
     ap.add_argument("--calibrate", action="store_true",
                     help="don't track; set the duty cycle by typing numbers so you can build CALIBRATION")
+    ap.add_argument("--idle-after", type=float, default=IDLE_AFTER,
+                    help=f"with nobody in view this many seconds, look around (default {IDLE_AFTER}, 0 = never)")
     ap.add_argument("--model", default=MODEL, choices=["yolov8s", "yolov8m"],
                     help=f"detector; bigger ones see small/far people better but run slower (default {MODEL})")
     ap.add_argument("--tile-top", type=int, default=TILE_TOP,
@@ -636,6 +676,8 @@ def main():
         threading.Thread(target=save_loop, args=(args.save_dir, args.save_every), daemon=True).start()
     if args.calibrate:
         threading.Thread(target=calibrate_loop, daemon=True).start()
+    if args.idle_after > 0:
+        threading.Thread(target=idle_loop, args=(args.idle_after,), daemon=True).start()
 
     # elements matching the pipeline that linked for you
     W, H = CAMERA_SIZE

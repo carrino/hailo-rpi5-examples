@@ -27,6 +27,7 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
 ./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
 ./track.sh --model yolov8m                         # bigger detector: sees small/far people better, ~half the fps
+./track.sh --idle-after 30                         # look around after this long with nobody in view (default 15, 0 = never)
 ./track.sh --tiles 0                               # tiling (off by default): 0 = as many tiles as fit, or give a number
 ./track.sh --tiles 0 --tile-top 180 --tile-height 360   # the band of rows the tiles cover (default: middle half at 720p)
 ```
@@ -37,6 +38,10 @@ per frame, round robin. the Hailo load is one inference per frame either way, bu
 every Nth frame so the eyes update slower. someone standing in the overlap is seen by two tiles; the clipped
 box is merged into the full one. off by default: the squashed frame is fine in daylight. the page
 draws the tiles when they're on.
+with nobody in view for `IDLE_AFTER` seconds (15) the eyes look around on their own: a slow sweep across
+`IDLE_RANGE` (cx 0.1 to 0.9, through the calibration), `IDLE_PERIOD` seconds (8) per round trip. it starts from
+wherever the eyes are, stops the moment someone is seen, and the header/page say LOOKING AROUND / LOOK. holding
+the eyes from the page also stops it.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
 reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3) is what gets followed. red boxes on the page are the
 band in between: if real people show up red, lower MIN_CONFIDENCE; if bushes show up red, don't.

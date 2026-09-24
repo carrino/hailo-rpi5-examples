@@ -39,7 +39,7 @@ every Nth frame so the eyes update slower. someone standing in the overlap is se
 box is merged into the full one. off by default: the squashed frame is fine in daylight. the page
 draws the tiles when they're on.
 with nobody in view for `IDLE_AFTER` seconds (15) the eyes look around on their own: a slow sweep across
-`IDLE_RANGE` (cx 0.1 to 0.9, through the calibration), `IDLE_PERIOD` seconds (8) per round trip. it starts from
+`IDLE_RANGE` (cx 0.1 to 0.9, through the calibration), `IDLE_PERIOD` seconds (16) per round trip, 8 each way. it starts from
 wherever the eyes are, stops the moment someone is seen, and the header/page say LOOKING AROUND / LOOK. holding
 the eyes from the page also stops it.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what

@@ -48,10 +48,10 @@ EDGE_MIN_WIDTH = 0.03
 ema_cx = None
 # With nobody in view for IDLE_AFTER seconds the eyes look around on their own: a slow sweep
 # between IDLE_RANGE (in cx, so it goes through the calibration like a person would), one
-# round trip every IDLE_PERIOD seconds. Anyone showing up takes over at once. Off while the
+# round trip every IDLE_PERIOD seconds (8 s each way). Anyone showing up takes over at once. Off while the
 # eyes are held from the page. --idle-after 0 turns it off.
 IDLE_AFTER = 15.0
-IDLE_PERIOD = 8.0
+IDLE_PERIOD = 16.0
 IDLE_RANGE = (0.1, 0.9)
 last_seen = time.time()   # when a person was last followed
 idle = False              # looking around right now

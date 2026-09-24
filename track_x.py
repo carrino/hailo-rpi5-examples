@@ -41,6 +41,13 @@ ALPHA = 0.25
 # Below this a detection is shown as a red box but not followed. yolo_person.json's
 # detection_threshold is the hard floor: nothing under it reaches this code at all.
 MIN_CONFIDENCE = 0.4    # --min-confidence; bushes and fence posts were getting followed at 0.3
+# A person has to be seen in PRESENT_FRAMES of the last PRESENT_WINDOW frames to count: a
+# one-frame flicker on a bush used to yank the eyes a quarter of the way over and park them
+# there until the idle look kicked in. The same rule in reverse means one missed frame
+# in the middle of a walk doesn't count as the person vanishing.
+PRESENT_FRAMES = 3
+PRESENT_WINDOW = 5
+recent = []             # True/False per frame: was there a confident person?
 # A box touching the left/right edge of the frame and narrower than this (fraction of the
 # frame width) is ignored: it's a pole or a car corner half out of shot, not a person. A
 # person at 40ft is still ~0.03 wide when fully in view.
@@ -281,8 +288,17 @@ def on_probe(pad, info):
         if w * h > best_area:
             best_area, best = w * h, (x, y, w, h)
 
+    # debounce: present only when seen in enough of the last few frames
+    recent.append(best is not None)
+    del recent[:-PRESENT_WINDOW]
+    present = sum(recent) >= PRESENT_FRAMES
+
     global ema_cx, last_seen, coast
-    if best:
+    if present and not best:
+        # a dropped frame mid-track: hold still, keep the pace history
+        if log_frames:
+            print("-1.0 (gap)", flush=True)
+    elif present:
         last_seen = now
         x, y, w, h = best
         cx = (x + 0.5 * w)
@@ -312,7 +328,7 @@ def on_probe(pad, info):
         elif log_frames:
             print("-1.0", flush=True)
 
-    publish_debug(frame, dets, best)
+    publish_debug(frame, dets, best if present else None)
     return Gst.PadProbeReturn.OK
 
 

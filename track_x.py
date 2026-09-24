@@ -19,6 +19,17 @@ CAMERA = "/dev/video0"
 CAMERA_SIZE = (1280, 720)   # MJPEG capture size; --camera-size WxH. The model always gets 640x640.
                             # 16:9 is a noticeably wider view than 640x480 on this camera.
 MODEL = "yolov8s"   # --model yolov8m sees small (far away) people better, at ~half the fps
+MODEL_SIZE = 640    # the input size baked into the yolov8 .hef files
+# Tiling: instead of squashing the whole 1280x720 frame into the model's 640x640 (people end
+# up half as wide), cut TILES windows of 640x640 out of it at full camera resolution and feed
+# them to the model in turn. Same inferences per second as before, twice the pixels per person.
+# Each tile is looked at every TILES-th frame. --tiles 1 is the old squash-the-frame behaviour.
+# The band of rows the tiles cover: everything above/below is ignored. If the band is shorter
+# than 640 it is scaled up to 640 tall first, which makes far-away people bigger to the model
+# (that's the point) and the band wider, so more tiles. Load stays one inference per frame.
+TILE_TOP = 180      # first row of the band (--tile-top); 720p: 180/360 = the middle half
+TILE_HEIGHT = 360   # rows in the band (--tile-height); 640 = no scaling
+TILES = None        # number of tiles across the (scaled) band, None = as many as fit (--tiles)
 HEF_DIR = "/usr/local/hailo/resources/models/hailo8l"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 
@@ -51,6 +62,17 @@ log_frames = True
 save_enabled = False
 debug_last_request = 0.0   # when a viewer last asked for a frame
 marks = []   # (cx, duty) checkpoints recorded from the debug page this session
+
+# tiling state (see TILES). Coordinates everywhere else are normalised to the full frame.
+tile_lefts = [0]           # left edge of each tile in the scaled band
+tile_top = 0               # band position in the capture frame
+tile_height = 0
+band_w = 0                 # width of the band after scaling to 640 tall
+tile_rr = 0                # which tile the next frame gets
+tile_of_pts = {}           # buffer pts -> tile index, set at the crop, read after the model
+tile_dets = {}             # tile index -> (time, [(x, y, w, h, c)] in full-frame coords)
+crop = None                # the videocrop element
+last_full_frame = None     # latest full RGB frame, only copied while the debug view is watched
 
 # Latest frame + detections, shared from the GStreamer probe to the debug view/saver threads.
 debug_lock = threading.Lock()
@@ -170,15 +192,20 @@ def on_probe(pad, info):
 
     objs = list(roi.get_objects_typed(hailo.HAILO_DETECTION))
 
-    frame = grab_frame(buf, s, fw, fh) if debug_wanted() else None
-    dets = []   # every person seen, (x, y, w, h, confidence), for the debug view
+    # which tile was this? map its detections into full-frame coordinates
+    k = tile_of_pts.pop(buf.pts, 0) if len(tile_lefts) > 1 else 0
+    if len(tile_of_pts) > 64:   # dropped frames leave orphans behind
+        tile_of_pts.clear()
+    W, H = CAMERA_SIZE
+    if len(tile_lefts) > 1:
+        sx, sy = MODEL_SIZE / band_w, tile_height / H
+        ox, oy = tile_lefts[k] / band_w, tile_top / H
+        frame = last_full_frame if debug_wanted() else None
+    else:
+        sx = sy = 1.0; ox = oy = 0.0
+        frame = grab_frame(buf, s, fw, fh) if debug_wanted() else None
 
-    if not objs:
-        publish_debug(frame, dets, None)
-        return Gst.PadProbeReturn.OK
-
-    # largest bbox (don’t depend on labels until we confirm them)
-    best = None; best_area = -1.0
+    dets = []   # every person seen in this tile, (x, y, w, h, confidence), full-frame coords
     for det in objs:
         try:
             label = getattr(det, "get_label", lambda: "")()
@@ -187,16 +214,26 @@ def on_probe(pad, info):
             b = det.get_bbox()
             x, y, w, h = _bbox_xywh(b)
             c = getattr(det, "get_confidence", lambda: None)()
+            x, y, w, h = ox + x * sx, oy + y * sy, w * sx, h * sy
             if log_frames:
-                print(f"[x] {x} {y} {h} {w} {c}")
+                print(f"[x] t{k} {x:.3f} {y:.3f} {w:.3f} {h:.3f} {c:.2f}")
             dets.append((x, y, w, h, c))
-            if c < MIN_CONFIDENCE:
-                continue
-            area = w * h
-            if area > best_area:
-                best_area, best = area, (x, y, w, h)
         except Exception:
             continue
+
+    # combine with the other tiles' latest results (a person can be in both, that's fine:
+    # the bigger box wins and the eyes don't care which tile found them)
+    now = time.time()
+    tile_dets[k] = (now, dets)
+    dets = [d for (t, ds) in tile_dets.values() if now - t < 0.25 for d in ds]
+
+    # follow the largest confident person
+    best = None; best_area = -1.0
+    for (x, y, w, h, c) in dets:
+        if c is None or c < MIN_CONFIDENCE:
+            continue
+        if w * h > best_area:
+            best_area, best = w * h, (x, y, w, h)
 
     if best:
         global ema_cx
@@ -219,7 +256,7 @@ def debug_wanted():
     return save_enabled or time.time() - debug_last_request < 5.0
 
 def grab_frame(buf, s, fw, fh):
-    """Copy the RGB frame out of the GStreamer buffer (the 640x640 image the model saw)."""
+    """Copy the RGB frame out of the GStreamer buffer."""
     if s.get_value("format") != "RGB":
         return None
     ok, mi = buf.map(Gst.MapFlags.READ)
@@ -229,6 +266,32 @@ def grab_frame(buf, s, fw, fh):
         return np.frombuffer(mi.data, dtype=np.uint8, count=fw * fh * 3).reshape(fh, fw, 3).copy()
     finally:
         buf.unmap(mi)
+
+def on_crop_sink(pad, info):
+    """Before the crop: pick this frame's tile, aim the crop at it, remember which it was."""
+    global tile_rr
+    buf = info.get_buffer()
+    if not buf:
+        return Gst.PadProbeReturn.OK
+    k = tile_rr
+    tile_rr = (tile_rr + 1) % len(tile_lefts)
+    left = tile_lefts[k]
+    crop.set_property("left", left)
+    crop.set_property("right", band_w - MODEL_SIZE - left)
+    tile_of_pts[buf.pts] = k
+    return Gst.PadProbeReturn.OK
+
+def on_full_frame(pad, info):
+    """Before the crop: keep a copy of the whole frame for the debug view."""
+    global last_full_frame
+    if not debug_wanted():
+        return Gst.PadProbeReturn.OK
+    buf = info.get_buffer()
+    caps = pad.get_current_caps()
+    if buf and caps:
+        s = caps.get_structure(0)
+        last_full_frame = grab_frame(buf, s, int(s.get_value("width")), int(s.get_value("height")))
+    return Gst.PadProbeReturn.OK
 
 def publish_debug(frame, dets, best):
     global debug_seq, debug_snap
@@ -245,6 +308,13 @@ def render(snap):
     img = cv2.resize(img, (640, int(round(640 * CAMERA_SIZE[1] / CAMERA_SIZE[0]))))
     H, W = img.shape[:2]
     font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # the tiles the model actually looks at
+    if len(tile_lefts) > 1:
+        y0 = int(tile_top / CAMERA_SIZE[1] * H); y1 = int((tile_top + tile_height) / CAMERA_SIZE[1] * H)
+        for i, left in enumerate(tile_lefts):
+            x0 = int(left / band_w * W); x1 = int((left + MODEL_SIZE) / band_w * W)
+            cv2.rectangle(img, (x0 + i, y0 + i), (x1 - 1 - i, y1 - 1 - i), (70, 70, 140), 1)
 
     # cx grid, so you can read off where a person is for CALIBRATION
     for i in range(1, 10):
@@ -488,7 +558,7 @@ def link_chain(elems):
             sys.exit(1)
 
 def main():
-    global calibrating, log_frames, save_enabled, CAMERA_SIZE
+    global calibrating, log_frames, save_enabled, CAMERA_SIZE, tile_lefts, tile_top, tile_height, band_w, crop
 
     ap = argparse.ArgumentParser(description="Halloween eyes: follow people with the eyes")
     ap.add_argument("--debug-port", type=int, default=DEBUG_PORT,
@@ -499,6 +569,12 @@ def main():
                     help="don't track; set the duty cycle by typing numbers so you can build CALIBRATION")
     ap.add_argument("--model", default=MODEL, choices=["yolov8s", "yolov8m"],
                     help=f"detector; bigger ones see small/far people better but run slower (default {MODEL})")
+    ap.add_argument("--tile-top", type=int, default=TILE_TOP,
+                    help=f"first row of the band of the frame the model looks at (default {TILE_TOP})")
+    ap.add_argument("--tile-height", type=int, default=TILE_HEIGHT,
+                    help=f"rows in that band; under 640 it is scaled up, making far people bigger (default {TILE_HEIGHT})")
+    ap.add_argument("--tiles", type=int, default=TILES,
+                    help="640x640 windows across the band, fed to the model in turn (default: as many as fit; 1 = squash the whole frame)")
     ap.add_argument("--camera-size", default=f"{CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}",
                     help="MJPEG capture size, e.g. 1280x720 (see v4l2-ctl --list-formats-ext). "
                          f"The model still gets 640x640. Default {CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}")
@@ -528,14 +604,43 @@ def main():
         threading.Thread(target=calibrate_loop, daemon=True).start()
 
     # elements matching the pipeline that linked for you
+    W, H = CAMERA_SIZE
+    tile_height = max(64, min(args.tile_height, H))
+    tile_top = max(0, min(args.tile_top, H - tile_height))
+    band_w = round(W * MODEL_SIZE / tile_height / 2) * 2     # band scaled to 640 tall (even width)
+    tiles = args.tiles if args.tiles else -(-band_w // MODEL_SIZE)   # as many as fit, rounding up
+    if band_w <= MODEL_SIZE:
+        tiles = 1
+    if tiles > 1:
+        # spread the tiles evenly across the scaled band, overlapping if it isn't a multiple of 640
+        tile_lefts = [round(i * (band_w - MODEL_SIZE) / (tiles - 1)) for i in range(tiles)]
+        print(f"band rows {tile_top}-{tile_top + tile_height} scaled to {band_w}x{MODEL_SIZE}, "
+              f"{tiles} tiles at lefts {tile_lefts}, one tile per frame", flush=True)
+    else:
+        tile_lefts = [0]; tile_top = 0; tile_height = H; band_w = W
+
     src = mk("v4l2src"); src.set_property("device", CAMERA); src.set_property("io-mode", 2); src.set_property("do-timestamp", True)
     caps_mjpg = mk("capsfilter"); caps_mjpg.set_property("caps", Gst.Caps.from_string(
-        f"image/jpeg,width={CAMERA_SIZE[0]},height={CAMERA_SIZE[1]},framerate=30/1"))
+        f"image/jpeg,width={W},height={H},framerate=30/1"))
     jpegdec = mk("jpegdec")
     vconv = mk("videoconvert")
-    vscale = mk("videoscale")
-    caps_rgb_sq = mk("capsfilter"); caps_rgb_sq.set_property("caps", Gst.Caps.from_string("video/x-raw,format=RGB,width=640,height=640"))
     q = mk("queue"); q.set_property("max-size-buffers", 3); q.set_property("leaky", 2)
+    if tiles > 1:
+        # band crop -> scale to 640 tall -> per-frame crop of one 640-wide tile
+        caps_rgb = mk("capsfilter"); caps_rgb.set_property("caps", Gst.Caps.from_string("video/x-raw,format=RGB"))
+        band = mk("videocrop")
+        band.set_property("top", tile_top); band.set_property("bottom", H - tile_height - tile_top)
+        bscale = mk("videoscale")
+        caps_band = mk("capsfilter"); caps_band.set_property("caps", Gst.Caps.from_string(
+            f"video/x-raw,format=RGB,width={band_w},height={MODEL_SIZE}"))
+        crop = mk("videocrop")
+        crop.set_property("left", tile_lefts[0]); crop.set_property("right", band_w - MODEL_SIZE - tile_lefts[0])
+        pre = [vconv, caps_rgb, q, band, bscale, caps_band, crop]
+    else:
+        vscale = mk("videoscale")
+        caps_rgb_sq = mk("capsfilter"); caps_rgb_sq.set_property("caps", Gst.Caps.from_string(
+            f"video/x-raw,format=RGB,width={MODEL_SIZE},height={MODEL_SIZE}"))
+        pre = [vconv, vscale, caps_rgb_sq, q]
     hef = os.path.join(HEF_DIR, f"{args.model}.hef")
     if not os.path.exists(hef):
         print(f"no such model file: {hef} (run ./download_resources.sh --all, or pick another --model)", file=sys.stderr)
@@ -549,11 +654,16 @@ def main():
 
     sink = mk("fakesink"); sink.set_property("sync", False)
 
+    chain = [src, caps_mjpg, jpegdec] + pre + [hailo_net, hailo_filt, sink]
     pipe = Gst.Pipeline.new("pipe")
-    for e in (src, caps_mjpg, jpegdec, vconv, vscale, caps_rgb_sq, q, hailo_net, hailo_filt, sink):
+    for e in chain:
         pipe.add(e)
+    link_chain(chain)
 
-    link_chain([src, caps_mjpg, jpegdec, vconv, vscale, caps_rgb_sq, q, hailo_net, hailo_filt, sink])
+    if tiles > 1:
+        # snapshot the full frame for the view; pick the tile per frame just before the crop
+        band.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, on_full_frame)
+        crop.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, on_crop_sink)
 
     # tap detections after postproc
     hailo_filt.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_probe)

@@ -27,7 +27,13 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
 ./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
 ./track.sh --model yolov8m                         # bigger detector: sees small/far people better, ~half the fps
+./track.sh --tile-top 180 --tile-height 360        # the band of rows the model looks at (default: middle half at 720p)
+./track.sh --tiles 1                               # old behaviour: squash the whole frame into 640x640
 ```
+tiling: the model's input is 640x640, so squashing a 1280x720 frame into it makes people half as wide.
+instead the band of rows between --tile-top and --tile-top + --tile-height is cut out, scaled to 640 tall
+(so far-away people get bigger to the model), and 640x640 tiles across it are fed to the model one per
+frame, round robin. the Hailo load is one inference per frame either way. the page draws the tiles.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
 reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3) is what gets followed. red boxes on the page are the
 band in between: if real people show up red, lower MIN_CONFIDENCE; if bushes show up red, don't.

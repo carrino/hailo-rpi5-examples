@@ -11,16 +11,18 @@ sudo cat /sys/kernel/debug/pwm  # pwm-2   (sysfs): requested enabled period: 100
 pinctrl  | grep pwm -i # we use pin 12 which is gpio18 18: a3    pd | hi // GPIO18 = PWM0_CHAN2
 ```
 
-see what the camera sees (open http://raspberrypi.local:8080/ on a phone/laptop on the same wifi)
+see what the camera sees: the live view is on by default, open http://raspberrypi.local:8080/ on a phone/laptop
+on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs nothing while nobody is watching.
 ```bash
-./track.sh --debug-port 8080                       # live view: boxes, cx grid, magenta line = where the eyes aim
+./track.sh                                         # same as at boot; view on :8080
+./track.sh --debug-port 0                          # turn the view off
 ./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
 ```
 green box = person being tracked, yellow = other person, red = below MIN_CONFIDENCE
 
 calibrate the eyes (tracking is off, you type duty cycles)
 ```bash
-./track.sh --calibrate --debug-port 8080
+./track.sh --calibrate
 ```
 stand near the left side of the view, read your cx off the grid, type duty values until the eyes look at you, write down (cx, duty).
 repeat near the right side (and the middle if it's not linear). put the pairs in `CALIBRATION` in track_x.py.

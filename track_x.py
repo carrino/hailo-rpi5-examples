@@ -33,10 +33,13 @@ CALIBRATION = [(0.0, 0.0), (1.0, 100.0)]
 DUTY_MIN = 0.0
 DUTY_MAX = 100.0
 
+DEBUG_PORT = 8080   # live view at http://<pi>:8080/ ; --debug-port 0 turns it off
+
 current_duty = 50.0
 calibrating = False
 log_frames = True
-debug_enabled = False
+save_enabled = False
+debug_last_request = 0.0   # when a viewer last asked for a frame
 
 # Latest frame + detections, shared from the GStreamer probe to the debug view/saver threads.
 debug_lock = threading.Lock()
@@ -122,7 +125,7 @@ def on_probe(pad, info):
 
     objs = list(roi.get_objects_typed(hailo.HAILO_DETECTION))
 
-    frame = grab_frame(buf, s, fw, fh) if debug_enabled else None
+    frame = grab_frame(buf, s, fw, fh) if debug_wanted() else None
     dets = []   # every person seen, (x, y, w, h, confidence), for the debug view
 
     if not objs:
@@ -165,6 +168,10 @@ def on_probe(pad, info):
     publish_debug(frame, dets, best)
     return Gst.PadProbeReturn.OK
 
+
+def debug_wanted():
+    """Only copy frames while someone is watching or we're saving, so idle cost is nil."""
+    return save_enabled or time.time() - debug_last_request < 5.0
 
 def grab_frame(buf, s, fw, fh):
     """Copy the RGB frame out of the GStreamer buffer (the 640x640 image the model saw)."""
@@ -227,7 +234,8 @@ def render(snap):
 
 def latest_jpeg():
     """Return (seq, jpeg bytes) of the newest frame, rendering it at most once."""
-    global debug_jpeg
+    global debug_jpeg, debug_last_request
+    debug_last_request = time.time()
     with debug_lock:
         seq, snap = debug_seq, debug_snap
         if snap is None or debug_jpeg[0] == seq:
@@ -322,11 +330,11 @@ def link_chain(elems):
             sys.exit(1)
 
 def main():
-    global calibrating, log_frames, debug_enabled
+    global calibrating, log_frames, save_enabled
 
     ap = argparse.ArgumentParser(description="Halloween eyes: follow people with the eyes")
-    ap.add_argument("--debug-port", type=int, default=None,
-                    help="serve a live annotated view at http://<pi>:PORT/ (e.g. 8080)")
+    ap.add_argument("--debug-port", type=int, default=DEBUG_PORT,
+                    help=f"serve a live annotated view at http://<pi>:PORT/ (default {DEBUG_PORT}, 0 = off)")
     ap.add_argument("--save-dir", default=None, help="save annotated frames to this directory")
     ap.add_argument("--save-every", type=float, default=1.0, help="seconds between saved frames (default 1)")
     ap.add_argument("--calibrate", action="store_true",
@@ -335,11 +343,11 @@ def main():
 
     calibrating = args.calibrate
     log_frames = not args.calibrate
-    debug_enabled = args.debug_port is not None or args.save_dir is not None
+    save_enabled = args.save_dir is not None
 
     pwm.start(current_duty)
 
-    if args.debug_port is not None:
+    if args.debug_port:
         srv = ThreadingHTTPServer(("0.0.0.0", args.debug_port), DebugHandler)
         srv.daemon_threads = True
         threading.Thread(target=srv.serve_forever, daemon=True).start()

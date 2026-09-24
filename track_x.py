@@ -20,17 +20,20 @@ CAMERA_SIZE = (1280, 720)   # MJPEG capture size; --camera-size WxH. The model a
                             # 16:9 is a noticeably wider view than 640x480 on this camera.
 MODEL = "yolov8s"   # --model yolov8m sees small (far away) people better, at ~half the fps
 MODEL_SIZE = 640    # the input size baked into the yolov8 .hef files
-# Tiling: instead of squashing the whole 1280x720 frame into the model's 640x640 (people end
-# up half as wide), cut TILES windows of 640x640 out of it at full camera resolution and feed
-# them to the model in turn. Same inferences per second as before, twice the pixels per person.
-# Each tile is looked at every TILES-th frame. --tiles 1 is the old squash-the-frame behaviour.
+# Tiling (off by default): instead of squashing the whole 1280x720 frame into the model's
+# 640x640 (people end up half as wide), cut TILES windows of 640x640 out of it at full camera
+# resolution and feed them to the model in turn. Same inferences per second, twice the pixels
+# per person, but each tile is only looked at every TILES-th frame, so the eyes update slower.
 # The band of rows the tiles cover: everything above/below is ignored. If the band is shorter
 # than 640 it is scaled up to 640 tall first, which makes far-away people bigger to the model
 # (that's the point) and the band wider, so more tiles. Load stays one inference per frame.
+# Worth trying for small far-away people (e.g. the street at night); the squashed full frame
+# has been fine in daylight and keeps the full camera frame rate.
 TILE_TOP = 180      # first row of the band (--tile-top); 720p: rows 180-540, the middle half
 TILE_HEIGHT = 360   # rows in the band (--tile-height); scales 1.78x to 640, and the 2276-wide
                     # result gives four tiles with ~95px overlap so nobody sits on a seam. 640 = no scaling.
-TILES = None        # number of tiles across the (scaled) band, None = as many as fit (--tiles)
+TILES = 1           # tiles across the (scaled) band (--tiles). 1 = squash the whole frame, no band.
+                    # 0 = as many as fit (4 with the defaults above).
 HEF_DIR = "/usr/local/hailo/resources/models/hailo8l"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 
@@ -575,7 +578,7 @@ def main():
     ap.add_argument("--tile-height", type=int, default=TILE_HEIGHT,
                     help=f"rows in that band; under 640 it is scaled up, making far people bigger (default {TILE_HEIGHT})")
     ap.add_argument("--tiles", type=int, default=TILES,
-                    help="640x640 windows across the band, fed to the model in turn (default: as many as fit; 1 = squash the whole frame)")
+                    help=f"640x640 tiles across the band, one per frame; 1 = squash the whole frame, 0 = as many as fit (default {TILES})")
     ap.add_argument("--camera-size", default=f"{CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}",
                     help="MJPEG capture size, e.g. 1280x720 (see v4l2-ctl --list-formats-ext). "
                          f"The model still gets 640x640. Default {CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}")
@@ -609,7 +612,7 @@ def main():
     tile_height = max(64, min(args.tile_height, H))
     tile_top = max(0, min(args.tile_top, H - tile_height))
     band_w = round(W * MODEL_SIZE / tile_height / 2) * 2     # band scaled to 640 tall (even width)
-    tiles = args.tiles if args.tiles else -(-band_w // MODEL_SIZE)   # as many as fit, rounding up
+    tiles = args.tiles if args.tiles > 0 else -(-band_w // MODEL_SIZE)   # 0 = as many as fit
     if band_w <= MODEL_SIZE:
         tiles = 1
     if tiles > 1:

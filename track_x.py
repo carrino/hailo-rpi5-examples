@@ -27,9 +27,9 @@ MODEL_SIZE = 640    # the input size baked into the yolov8 .hef files
 # The band of rows the tiles cover: everything above/below is ignored. If the band is shorter
 # than 640 it is scaled up to 640 tall first, which makes far-away people bigger to the model
 # (that's the point) and the band wider, so more tiles. Load stays one inference per frame.
-TILE_TOP = 200      # first row of the band (--tile-top); 720p: rows 200-520, the middle
-TILE_HEIGHT = 320   # rows in the band (--tile-height); 320 scales up exactly 2x to 640 and the
-                    # 2560-wide result is exactly four 640 tiles. 640 = no scaling.
+TILE_TOP = 180      # first row of the band (--tile-top); 720p: rows 180-540, the middle half
+TILE_HEIGHT = 360   # rows in the band (--tile-height); scales 1.78x to 640, and the 2276-wide
+                    # result gives four tiles with ~95px overlap so nobody sits on a seam. 640 = no scaling.
 TILES = None        # number of tiles across the (scaled) band, None = as many as fit (--tiles)
 HEF_DIR = "/usr/local/hailo/resources/models/hailo8l"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"

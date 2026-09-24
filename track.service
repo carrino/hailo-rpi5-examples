@@ -1,0 +1,14 @@
+# symlink to /etc/systemd/system/track.service
+
+[Unit]
+Description=camera-tracker
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/hailo-rpi5-examples
+ExecStart=/home/pi/hailo-rpi5-examples/track.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+

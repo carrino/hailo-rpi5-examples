@@ -11,6 +11,14 @@ sudo cat /sys/kernel/debug/pwm  # pwm-2   (sysfs): requested enabled period: 100
 pinctrl  | grep pwm -i # we use pin 12 which is gpio18 18: a3    pd | hi // GPIO18 = PWM0_CHAN2
 ```
 
+runs at boot as a systemd service (track.service in this repo). to (re)install it:
+```bash
+sudo ln -sf /home/pi/hailo-rpi5-examples/track.service /etc/systemd/system/track.service
+sudo systemctl daemon-reload && sudo systemctl enable --now track
+sudo systemctl restart track                 # after changing code
+sudo journalctl -u track -n 30 --no-pager    # its logs
+```
+
 see what the camera sees: the live view is on by default, open http://raspberrypi.local:8080/ on a phone/laptop
 on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs nothing while nobody is watching.
 ```bash

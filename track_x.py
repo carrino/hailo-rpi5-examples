@@ -302,7 +302,7 @@ def latest_jpeg():
         return debug_jpeg
 
 
-PAGE_HTML = """<!doctype html><html><head><meta charset="utf-8">
+PAGE_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>eyes</title>
 <style>

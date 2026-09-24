@@ -59,6 +59,22 @@ IDLE_RANGE = (0.1, 0.9)
 last_seen = time.time()   # when a person was last followed
 idle = False              # looking around right now
 
+# Coasting: when the person being followed vanishes mid-frame while walking at a steady pace
+# (behind a trellis, the tree), keep the eyes moving at that pace instead of freezing. The
+# pace is a straight-line fit over the last COAST_FIT seconds of positions; it has to be at
+# least COAST_MIN_SPEED (cx per second, 0.05 = across the frame in 20 s) and steady (fit
+# error under COAST_MAX_ERR) or the eyes just stop. Coasting lasts COAST_MAX seconds, or if
+# they vanished at one of the BLOCKED spans of the frame (cx ranges of things that hide
+# people, drawn on the page) until they should have come out the other side. Someone
+# reappearing takes over at once.
+COAST_FIT = 1.0
+COAST_MIN_SPEED = 0.05
+COAST_MAX_ERR = 0.04
+COAST_MAX = 3.0
+BLOCKED = [(0.14, 0.19), (0.29, 0.34), (0.49, 0.71)]   # trellis, trellis, tree (1280x720 view)
+track_hist = []   # (t, cx) of the followed person over the last COAST_FIT seconds
+coast = None      # (speed, t_prev, stop_cx, t_max) while dead-reckoning
+
 # Maps where the person is in the camera image to where the eyes should point.
 # Each pair is (cx, duty): cx is the person's center in the image (0.0 = left edge,
 # 1.0 = right edge), duty is the PWM duty cycle (0-100) that aims the eyes at them.
@@ -260,21 +276,62 @@ def on_probe(pad, info):
         if w * h > best_area:
             best_area, best = w * h, (x, y, w, h)
 
+    global ema_cx, last_seen, coast
     if best:
-        global ema_cx, last_seen
         last_seen = now
         x, y, w, h = best
         cx = (x + 0.5 * w)
         ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
+        track_hist.append((now, cx))
+        while track_hist and now - track_hist[0][0] > COAST_FIT:
+            track_hist.pop(0)
+        coast = None
         if not calibrating:
             set_duty(cx_to_duty(ema_cx))
         if log_frames:
             print(f"{ema_cx:.4f} duty={current_duty:.1f}", flush=True)
-    elif log_frames:
-        print("-1.0", flush=True)
+    else:
+        if coast is None and track_hist:
+            coast = start_coast(now)
+            track_hist.clear()
+        if coast is not None:
+            v, t_prev, stop_cx, t_max = coast
+            ema_cx = min(1.0, max(0.0, ema_cx + v * (now - t_prev)))
+            done = (now >= t_max or ema_cx in (0.0, 1.0)
+                    or (stop_cx is not None and (ema_cx - stop_cx) * v >= 0))
+            coast = None if done else (v, now, stop_cx, t_max)
+            if not calibrating:
+                set_duty(cx_to_duty(ema_cx))
+            if log_frames:
+                print(f"coast {ema_cx:.4f} duty={current_duty:.1f}", flush=True)
+        elif log_frames:
+            print("-1.0", flush=True)
 
     publish_debug(frame, dets, best)
     return Gst.PadProbeReturn.OK
+
+
+def start_coast(now):
+    """The person just vanished. If they were walking at a steady pace, return how to keep the
+    eyes going: (speed in cx/s, now, cx to stop at or None, time to give up)."""
+    if len(track_hist) < 6 or now - track_hist[-1][0] > 0.5:
+        return None
+    t0 = track_hist[0][0]
+    ts = [t - t0 for t, _ in track_hist]; xs = [x for _, x in track_hist]
+    if ts[-1] < 0.4:
+        return None
+    n = len(ts); mt = sum(ts) / n; mx = sum(xs) / n
+    sxx = sum((t - mt) ** 2 for t in ts)
+    v = sum((t - mt) * (x - mx) for t, x in zip(ts, xs)) / sxx
+    err = max(abs(x - (mx + v * (t - mt))) for t, x in zip(ts, xs))
+    if abs(v) < COAST_MIN_SPEED or err > COAST_MAX_ERR:
+        return None
+    here = xs[-1]
+    for lo, hi in BLOCKED:
+        if lo - 0.05 <= here <= hi + 0.05:
+            stop = hi + 0.03 if v > 0 else lo - 0.03
+            return (v, now, stop, now + min(8.0, abs(stop - here) / abs(v)) + 0.5)
+    return (v, now, None, now + COAST_MAX)
 
 
 def dedupe(dets, overlap=0.6):
@@ -387,6 +444,11 @@ def render(snap):
     H, W = img.shape[:2]
     font = cv2.FONT_HERSHEY_SIMPLEX
 
+    # spans of the frame where people get hidden (coasting territory)
+    for lo, hi in BLOCKED:
+        x0, x1 = int(lo * W), int(hi * W)
+        img[:, x0:x1] = (img[:, x0:x1] * 0.75 + np.array([0, 0, 255]) * 0.25).astype(np.uint8)
+
     # the tiles the model actually looks at
     if len(tile_lefts) > 1:
         y0 = int(tile_top / CAMERA_SIZE[1] * H); y1 = int((tile_top + tile_height) / CAMERA_SIZE[1] * H)
@@ -433,6 +495,8 @@ def render(snap):
     if calibrating:
         want = f" calib says {cx_to_duty(ema):.1f}" if ema is not None else ""
         text = f"HOLD duty={duty:.1f}{want} cx={ema_txt} people={len(dets)}"
+    elif coast is not None:
+        text = f"COASTING cx={ema_txt} duty={duty:.1f} people={len(dets)}"
     elif idle:
         text = f"LOOKING AROUND cx={ema_txt} duty={duty:.1f} people={len(dets)}"
     else:
@@ -493,7 +557,7 @@ let S={};
 function post(u){fetch(u,{method:'POST'}).then(r=>r.text()).then(t=>{if(t&&t!='ok')alert(t);poll();});}
 function poll(){fetch('/status').then(r=>r.json()).then(s=>{S=s;
  const cx=s.cx==null?'-':s.cx.toFixed(3);
- document.getElementById('st').textContent=(s.calibrating?'HOLD  ':s.idle?'LOOK  ':'TRACK ')+'cx='+cx+'  duty='+s.duty.toFixed(1)
+ document.getElementById('st').textContent=(s.calibrating?'HOLD  ':s.coasting?'COAST ':s.idle?'LOOK  ':'TRACK ')+'cx='+cx+'  duty='+s.duty.toFixed(1)
    +(s.cx!=null?'  calib says '+s.predicted.toFixed(1):'')+'  people='+s.people;
  document.getElementById('hold').className=s.calibrating?'on':'';
  document.getElementById('hold').textContent=s.calibrating?'Holding (tap to track)':'Hold eyes';
@@ -506,6 +570,7 @@ setInterval(poll,500);poll();
 def status_json():
     return json.dumps({
         "cx": ema_cx, "duty": current_duty, "calibrating": calibrating, "idle": idle,
+        "coasting": coast is not None,
         "predicted": cx_to_duty(ema_cx) if ema_cx is not None else None,
         "people": len(debug_snap[1]) if debug_snap else 0,
         "marks": marks, "calibration": CALIBRATION,

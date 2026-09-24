@@ -42,6 +42,10 @@ with nobody in view for `IDLE_AFTER` seconds (15) the eyes look around on their 
 end of `IDLE_RANGE` (cx 0.1 to 0.9, through the calibration) to the other taking `IDLE_MOVE` seconds (16), then
 `IDLE_REST` seconds (15) still, then a look back. it starts from wherever the eyes are, stops the moment someone
 is seen, and the header/page say LOOKING AROUND / LOOK. holding the eyes from the page also stops it.
+when the person being followed vanishes mid-frame while walking at a steady pace (behind the trellises or the
+tree) the eyes keep going at that pace: for `COAST_MAX` seconds (3), or if they vanished at one of the `BLOCKED`
+spans (cx ranges, tinted red on the page; set them for your view) until they should be out the other side.
+the header says COASTING. someone reappearing takes over at once; a person who stops in view is still seen.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
 reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3) is what gets followed. red boxes on the page are the
 band in between: if real people show up red, lower MIN_CONFIDENCE; if bushes show up red, don't.

@@ -34,6 +34,7 @@ tune where the eyes point, from the phone page (http://ai.local:8080/):
 3. tap **Mark (cx, duty)**. repeat at a few spots across the view (left, middle, right)
 4. tap **Apply marks**: the marks become the calibration, saved to calibration.json (loaded at boot,
    overrides CALIBRATION in track_x.py). **Reset calibration** goes back to duty = cx*100.
+   **Flip direction** mirrors left/right (camera mounted the other way up).
 
 the header shows the cx it sees and the duty it sent; in hold mode it also shows what the
 current calibration would send, so you can see how far off it is. each Mark also saves a

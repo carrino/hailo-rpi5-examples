@@ -85,6 +85,10 @@ def save_calibration(pts):
     with open(CALIB_FILE, "w") as f:
         json.dump(CALIBRATION, f)
 
+def flip_calibration():
+    """Mirror left/right: e.g. when the camera is mounted the other way up."""
+    save_calibration([(cx, DUTY_MIN + DUTY_MAX - d) for cx, d in CALIBRATION])
+
 def reset_calibration():
     global CALIBRATION
     CALIBRATION = [(0.0, 0.0), (1.0, 100.0)]
@@ -324,6 +328,7 @@ PAGE_HTML = """<!doctype html><html><head><meta charset="utf-8">
  <button class="go" onclick="post('/mark')">Mark (cx, duty)</button>
  <button onclick="post('/marks/clear')">Clear marks</button>
  <button class="go" onclick="if(confirm('Use the marks as the calibration and save it?'))post('/calibration/apply')">Apply marks</button>
+ <button onclick="post('/calibration/flip')">Flip direction</button>
  <button onclick="if(confirm('Back to duty = cx*100?'))post('/calibration/reset')">Reset calibration</button>
 </div>
 <div class="pairs" id="pairs"></div>
@@ -389,6 +394,9 @@ class DebugHandler(BaseHTTPRequestHandler):
                     return self.reply("no marks yet", code=400)
                 save_calibration(marks)
                 print(f"calibration saved to {CALIB_FILE}: {CALIBRATION}", flush=True)
+            elif url.path == "/calibration/flip":
+                flip_calibration()
+                print(f"calibration flipped: {CALIBRATION}", flush=True)
             elif url.path == "/calibration/reset":
                 reset_calibration()
             else:

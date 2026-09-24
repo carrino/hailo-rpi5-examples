@@ -16,6 +16,7 @@ from rpi_hardware_pwm import HardwarePWM
 pwm = HardwarePWM(pwm_channel=2, hz=10000, chip=0)
 
 CAMERA = "/dev/video0"
+CAMERA_SIZE = (640, 480)   # MJPEG capture size; --camera-size WxH. The model always gets 640x640.
 HEF = "/usr/local/hailo/resources/models/hailo8l/yolov8s.hef"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 
@@ -236,7 +237,8 @@ def publish_debug(frame, dets, best):
 def render(snap):
     frame, dets, best, ema, duty = snap
     img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    img = cv2.resize(img, (640, 480))   # undo the 640x480 -> 640x640 squash so people look normal
+    # undo the squash to 640x640 so people look normal: back to the capture's aspect ratio
+    img = cv2.resize(img, (640, int(round(640 * CAMERA_SIZE[1] / CAMERA_SIZE[0]))))
     H, W = img.shape[:2]
     font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -482,7 +484,7 @@ def link_chain(elems):
             sys.exit(1)
 
 def main():
-    global calibrating, log_frames, save_enabled
+    global calibrating, log_frames, save_enabled, CAMERA_SIZE
 
     ap = argparse.ArgumentParser(description="Halloween eyes: follow people with the eyes")
     ap.add_argument("--debug-port", type=int, default=DEBUG_PORT,
@@ -491,7 +493,16 @@ def main():
     ap.add_argument("--save-every", type=float, default=1.0, help="seconds between saved frames (default 1)")
     ap.add_argument("--calibrate", action="store_true",
                     help="don't track; set the duty cycle by typing numbers so you can build CALIBRATION")
+    ap.add_argument("--camera-size", default=f"{CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}",
+                    help="MJPEG capture size, e.g. 1280x720 (see v4l2-ctl --list-formats-ext). "
+                         f"The model still gets 640x640. Default {CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}")
     args = ap.parse_args()
+
+    try:
+        w, h = (int(v) for v in args.camera_size.lower().split("x"))
+        CAMERA_SIZE = (w, h)
+    except ValueError:
+        ap.error(f"--camera-size wants WxH, got {args.camera_size!r}")
 
     calibrating = args.calibrate
     log_frames = not args.calibrate
@@ -512,7 +523,8 @@ def main():
 
     # elements matching the pipeline that linked for you
     src = mk("v4l2src"); src.set_property("device", CAMERA); src.set_property("io-mode", 2); src.set_property("do-timestamp", True)
-    caps_mjpg = mk("capsfilter"); caps_mjpg.set_property("caps", Gst.Caps.from_string("image/jpeg,width=640,height=480,framerate=30/1"))
+    caps_mjpg = mk("capsfilter"); caps_mjpg.set_property("caps", Gst.Caps.from_string(
+        f"image/jpeg,width={CAMERA_SIZE[0]},height={CAMERA_SIZE[1]},framerate=30/1"))
     jpegdec = mk("jpegdec")
     vconv = mk("videoconvert")
     vscale = mk("videoscale")

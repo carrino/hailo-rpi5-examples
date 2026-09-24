@@ -232,11 +232,13 @@ def on_probe(pad, info):
         except Exception:
             continue
 
-    # combine with the other tiles' latest results (a person can be in both, that's fine:
-    # the bigger box wins and the eyes don't care which tile found them)
+    # combine with the other tiles' latest results. A person standing in the overlap is seen
+    # by two tiles (one of them clipped), so drop boxes that mostly sit inside a bigger one.
     now = time.time()
     tile_dets[k] = (now, dets)
     dets = [d for (t, ds) in tile_dets.values() if now - t < 0.25 for d in ds]
+    if len(tile_lefts) > 1:
+        dets = dedupe(dets)
 
     # follow the largest confident person
     best = None; best_area = -1.0
@@ -260,6 +262,27 @@ def on_probe(pad, info):
 
     publish_debug(frame, dets, best)
     return Gst.PadProbeReturn.OK
+
+
+def dedupe(dets, overlap=0.6):
+    """Merge boxes from different tiles that are the same person: a box is dropped if more
+    than `overlap` of it lies inside a bigger box (which keeps the bigger box's confidence
+    or the dropped one's, whichever is higher)."""
+    dets = sorted(dets, key=lambda d: d[2] * d[3], reverse=True)
+    kept = []
+    for (x, y, w, h, c) in dets:
+        dup = None
+        for i, (kx, ky, kw, kh, kc) in enumerate(kept):
+            iw = min(x + w, kx + kw) - max(x, kx)
+            ih = min(y + h, ky + kh) - max(y, ky)
+            if iw > 0 and ih > 0 and iw * ih > overlap * w * h:
+                dup = i
+                break
+        if dup is None:
+            kept.append((x, y, w, h, c))
+        elif c is not None and (kept[dup][4] is None or c > kept[dup][4]):
+            kept[dup] = kept[dup][:4] + (c,)
+    return kept
 
 
 def debug_wanted():

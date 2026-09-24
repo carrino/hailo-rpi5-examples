@@ -34,7 +34,8 @@ tiling: the model's input is 640x640, so squashing a 1280x720 frame into it make
 with --tiles the band of rows between --tile-top and --tile-top + --tile-height is cut out, scaled to 640
 tall (so far-away people get bigger to the model), and 640x640 tiles across it are fed to the model one
 per frame, round robin. the Hailo load is one inference per frame either way, but each tile is only seen
-every Nth frame so the eyes update slower. off by default: the squashed frame is fine in daylight. the page
+every Nth frame so the eyes update slower. someone standing in the overlap is seen by two tiles; the clipped
+box is merged into the full one. off by default: the squashed frame is fine in daylight. the page
 draws the tiles when they're on.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
 reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3) is what gets followed. red boxes on the page are the

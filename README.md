@@ -26,7 +26,6 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ./track.sh --debug-port 0                          # turn the view off
 ./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
 ./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
-```
 ./track.sh --model yolov8m                         # bigger detector: sees small/far people better, ~half the fps
 ```
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what

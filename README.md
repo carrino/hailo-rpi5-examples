@@ -39,6 +39,8 @@ draws the tiles when they're on.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
 reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3) is what gets followed. red boxes on the page are the
 band in between: if real people show up red, lower MIN_CONFIDENCE; if bushes show up red, don't.
+boxes touching the left/right edge narrower than `EDGE_MIN_WIDTH` (3% of the frame) are ignored entirely:
+a pole or car corner half out of shot kept getting called a person at 0.2-0.38.
 the model always gets 640x640 whatever the capture size is, so a bigger capture costs the Hailo nothing
 (only some CPU for jpeg decode). `v4l2-ctl -d /dev/video0 --list-formats-ext` lists what the camera offers.
 green box = person being tracked, yellow = other person, red = below MIN_CONFIDENCE

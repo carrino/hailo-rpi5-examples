@@ -41,6 +41,10 @@ ALPHA = 0.25
 # Below this a detection is shown as a red box but not followed. yolo_person.json's
 # detection_threshold is the hard floor: nothing under it reaches this code at all.
 MIN_CONFIDENCE = 0.3
+# A box touching the left/right edge of the frame and narrower than this (fraction of the
+# frame width) is ignored: it's a pole or a car corner half out of shot, not a person. A
+# person at 40ft is still ~0.03 wide when fully in view.
+EDGE_MIN_WIDTH = 0.03
 ema_cx = None
 
 # Maps where the person is in the camera image to where the eyes should point.
@@ -219,8 +223,11 @@ def on_probe(pad, info):
             x, y, w, h = _bbox_xywh(b)
             c = getattr(det, "get_confidence", lambda: None)()
             x, y, w, h = ox + x * sx, oy + y * sy, w * sx, h * sy
+            edge = x <= 0.005 or x + w >= 0.995
             if log_frames:
-                print(f"[x] t{k} {x:.3f} {y:.3f} {w:.3f} {h:.3f} {c:.2f}")
+                print(f"[{'edge' if edge and w < EDGE_MIN_WIDTH else 'x'}] t{k} {x:.3f} {y:.3f} {w:.3f} {h:.3f} {c:.2f}")
+            if edge and w < EDGE_MIN_WIDTH:
+                continue
             dets.append((x, y, w, h, c))
         except Exception:
             continue

@@ -40,7 +40,7 @@ SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 ALPHA = 0.25
 # Below this a detection is shown as a red box but not followed. yolo_person.json's
 # detection_threshold is the hard floor: nothing under it reaches this code at all.
-MIN_CONFIDENCE = 0.3
+MIN_CONFIDENCE = 0.4    # --min-confidence; bushes and fence posts were getting followed at 0.3
 # A box touching the left/right edge of the frame and narrower than this (fraction of the
 # frame width) is ignored: it's a pole or a car corner half out of shot, not a person. A
 # person at 40ft is still ~0.03 wide when fully in view.
@@ -725,7 +725,8 @@ def link_chain(elems):
             sys.exit(1)
 
 def main():
-    global calibrating, log_frames, save_enabled, CAMERA_SIZE, tile_lefts, tile_top, tile_height, band_w, crop
+    global calibrating, log_frames, save_enabled, CAMERA_SIZE, MIN_CONFIDENCE
+    global tile_lefts, tile_top, tile_height, band_w, crop
 
     ap = argparse.ArgumentParser(description="Halloween eyes: follow people with the eyes")
     ap.add_argument("--debug-port", type=int, default=DEBUG_PORT,
@@ -734,6 +735,8 @@ def main():
     ap.add_argument("--save-every", type=float, default=1.0, help="seconds between saved frames (default 1)")
     ap.add_argument("--calibrate", action="store_true",
                     help="don't track; set the duty cycle by typing numbers so you can build CALIBRATION")
+    ap.add_argument("--min-confidence", type=float, default=MIN_CONFIDENCE,
+                    help=f"follow people the model is at least this sure of; below shows as a red box (default {MIN_CONFIDENCE})")
     ap.add_argument("--idle-after", type=float, default=IDLE_AFTER,
                     help=f"with nobody in view this many seconds, look around (default {IDLE_AFTER}, 0 = never)")
     ap.add_argument("--model", default=MODEL, choices=["yolov8s", "yolov8m"],
@@ -748,6 +751,7 @@ def main():
                     help="MJPEG capture size, e.g. 1280x720 (see v4l2-ctl --list-formats-ext). "
                          f"The model still gets 640x640. Default {CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}")
     args = ap.parse_args()
+    MIN_CONFIDENCE = args.min_confidence
 
     try:
         w, h = (int(v) for v in args.camera_size.lower().split("x"))

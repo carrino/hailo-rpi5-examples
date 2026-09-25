@@ -38,6 +38,13 @@ PRESENT_WINDOW = 8      # ~0.27 s: at night the detector only catches a person e
 # out 0.6-0.7 for real people even in the dark, and those don't need a second opinion.
 SURE_CONFIDENCE = 0.6   # --sure-confidence
 
+# The camera keeps whatever v4l2 controls it was last given, across service restarts and
+# even a soft reboot, so an evening of experiments can leave it blind. These are applied at
+# every start. power_line_frequency=0 matters: with anti-flicker on, the exposure can't go
+# shorter than a mains half-cycle and a sunny day is white.
+CAMERA_DEFAULTS = ["auto_exposure=3", "power_line_frequency=0", "gain=0", "gamma=100",
+                   "backlight_compensation=1", "brightness=0", "contrast=128"]
+
 # Night: auto exposure meters the whole frame, and one lit-up tree keeps the exposure short
 # while the sidewalk goes black. With --night-exposure N the script watches the frame's
 # brightness and switches the camera to manual exposure N (units of 100 us; 2000 = 0.2 s,
@@ -363,6 +370,16 @@ def sample_luma(buf, s, fw, fh, frame):
         frame = grab_frame(buf, s, fw, fh)
     if frame is not None:
         scene_luma = float(frame[::8, ::8].mean())
+
+
+def camera_defaults():
+    """Put the camera's controls in a known state (see CAMERA_DEFAULTS)."""
+    args = ["v4l2-ctl", "-d", CAMERA] + [a for c in CAMERA_DEFAULTS for a in ("-c", c)]
+    try:
+        subprocess.run(args, check=True, capture_output=True, timeout=5)
+        print(f"camera: {' '.join(CAMERA_DEFAULTS)}", flush=True)
+    except Exception as e:
+        print(f"camera: setting defaults failed: {e}", flush=True)
 
 
 def set_exposure(manual):
@@ -762,6 +779,8 @@ def main():
         threading.Thread(target=idle_loop, args=(args.idle_after,), daemon=True).start()
     if args.night_exposure > 0:
         threading.Thread(target=night_loop, args=(args.night_exposure,), daemon=True).start()
+
+    camera_defaults()
 
     # elements matching the pipeline that linked for you
     W, H = CAMERA_SIZE

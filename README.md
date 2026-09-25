@@ -50,6 +50,9 @@ value without editing anything, put it on the ExecStart line of track.service (`
 a person has to be seen in `PRESENT_FRAMES` of the last `PRESENT_WINDOW` frames (3 of 8, about a quarter second) to be followed or
 to reset the idle timer: a one-frame flicker on a bush used to move the eyes and park them for 15 s. unless the
 model is sure: at or above `SURE_CONFIDENCE` (0.6, `--sure-confidence`) one frame is enough.
+the camera keeps whatever v4l2 controls it was last given, even across a reboot, so the script puts them in a
+known state every start (`CAMERA_DEFAULTS`: auto exposure, anti-flicker off, gain 0, gamma 100...). anti-flicker
+off matters: with it on the exposure can't go shorter than a mains half-cycle and a sunny day comes out white.
 at night: auto exposure meters the whole frame, so a lit-up tree keeps the exposure short and the sidewalk goes
 black. `--night-exposure 2000` (100 us units; 2000 = 0.2 s, ~5 fps) makes the script watch the frame brightness
 (shown as `light=` on the page) and switch the camera to that manual exposure when the scene is dark and back to

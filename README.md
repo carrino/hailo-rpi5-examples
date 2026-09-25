@@ -28,16 +28,10 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
 ./track.sh --model yolov8m                         # bigger detector: sees small/far people better, ~half the fps
 ./track.sh --idle-after 30                         # look around after this long with nobody in view (default 15, 0 = never)
-./track.sh --tiles 0                               # tiling (off by default): 0 = as many tiles as fit, or give a number
-./track.sh --tiles 0 --tile-top 180 --tile-height 360   # the band of rows the tiles cover (default: middle half at 720p)
 ```
-tiling: the model's input is 640x640, so squashing a 1280x720 frame into it makes people half as wide.
-with --tiles the band of rows between --tile-top and --tile-top + --tile-height is cut out, scaled to 640
-tall (so far-away people get bigger to the model), and 640x640 tiles across it are fed to the model one
-per frame, round robin. the Hailo load is one inference per frame either way, but each tile is only seen
-every Nth frame so the eyes update slower. someone standing in the overlap is seen by two tiles; the clipped
-box is merged into the full one. off by default: the squashed frame is fine in daylight. the page
-draws the tiles when they're on.
+the model's input is 640x640, so the 1280x720 frame is squashed into it and people come out half as wide.
+that has been fine. (tiling the frame to keep people full size was tried and taken out again: it
+cut the refresh rate, invented phantom people at the tile edges, and didn't help at night.)
 with nobody in view for `IDLE_AFTER` seconds (15) the eyes look around on their own: an eased look from one
 end of `IDLE_RANGE` (cx 0.1 to 0.9, through the calibration) to the other taking `IDLE_MOVE` seconds (16), then
 `IDLE_REST` seconds (15) still, then a look back. it starts from wherever the eyes are, stops the moment someone
@@ -52,8 +46,7 @@ the page are the band in between: if real people show up red, lower it; if bushe
 value without editing anything, put it on the ExecStart line of track.service (`track.sh --min-confidence 0.5`),
 `sudo systemctl daemon-reload`, restart.
 a person has to be seen in `PRESENT_FRAMES` of the last `PRESENT_WINDOW` frames (3 of 5, 0.1 s) to be followed or
-to reset the idle timer: a one-frame flicker on a bush used to move the eyes and park them for 15 s. with tiles
-the unit is the look at a tile instead: a box has to show up in two looks at the same tile in a row.
+to reset the idle timer: a one-frame flicker on a bush used to move the eyes and park them for 15 s.
 boxes touching the left/right edge narrower than `EDGE_MIN_WIDTH` (3% of the frame) are ignored entirely:
 a pole or car corner half out of shot kept getting called a person at 0.2-0.38.
 the model always gets 640x640 whatever the capture size is, so a bigger capture costs the Hailo nothing

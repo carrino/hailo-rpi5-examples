@@ -26,13 +26,14 @@ SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 ALPHA = 0.25
 # Below this a detection is shown as a red box but not followed. yolo_person.json's
 # detection_threshold is the hard floor: nothing under it reaches this code at all.
-MIN_CONFIDENCE = 0.4    # --min-confidence; bushes and fence posts were getting followed at 0.3
+MIN_CONFIDENCE = 0.35   # --min-confidence. At night a real person hovers around 0.4; the
+                        # debounce below is what keeps bushes and fence posts out, not this.
 # A person has to be seen in PRESENT_FRAMES of the last PRESENT_WINDOW frames to count: a
 # one-frame flicker on a bush used to yank the eyes a quarter of the way over and park them
 # there until the idle look kicked in. The same rule in reverse means one missed frame
 # in the middle of a walk doesn't count as the person vanishing.
 PRESENT_FRAMES = 3
-PRESENT_WINDOW = 5
+PRESENT_WINDOW = 8      # ~0.27 s: at night the detector only catches a person every few frames
 recent = []             # True/False per frame: was there a confident person?
 # A box touching the left/right edge of the frame and narrower than this (fraction of the
 # frame width) is ignored: it's a pole or a car corner half out of shot, not a person. A

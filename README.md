@@ -41,11 +41,11 @@ tree) the eyes keep going at that pace: for `COAST_MAX` seconds (3), or if they 
 spans (cx ranges, tinted red on the page; set them for your view) until they should be out the other side.
 the header says COASTING. someone reappearing takes over at once; a person who stops in view is still seen.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
-reaches the code; `MIN_CONFIDENCE` in track_x.py (0.4, or `--min-confidence`) is what gets followed. red boxes on
+reaches the code; `MIN_CONFIDENCE` in track_x.py (0.35, or `--min-confidence`) is what gets followed. red boxes on
 the page are the band in between: if real people show up red, lower it; if bushes show up red, don't. to try a
 value without editing anything, put it on the ExecStart line of track.service (`track.sh --min-confidence 0.5`),
 `sudo systemctl daemon-reload`, restart.
-a person has to be seen in `PRESENT_FRAMES` of the last `PRESENT_WINDOW` frames (3 of 5, 0.1 s) to be followed or
+a person has to be seen in `PRESENT_FRAMES` of the last `PRESENT_WINDOW` frames (3 of 8, about a quarter second) to be followed or
 to reset the idle timer: a one-frame flicker on a bush used to move the eyes and park them for 15 s.
 boxes touching the left/right edge narrower than `EDGE_MIN_WIDTH` (3% of the frame) are ignored entirely:
 a pole or car corner half out of shot kept getting called a person at 0.2-0.38.

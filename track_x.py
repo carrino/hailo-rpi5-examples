@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import argparse, gi, json, math, os, sys, threading, time
+import argparse, gi, json, math, os, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 gi.require_version('Gst', '1.0')
@@ -34,6 +34,20 @@ MIN_CONFIDENCE = 0.35   # --min-confidence. At night a real person hovers around
 # in the middle of a walk doesn't count as the person vanishing.
 PRESENT_FRAMES = 3
 PRESENT_WINDOW = 8      # ~0.27 s: at night the detector only catches a person every few frames
+# ...unless the model is sure: at or above SURE_CONFIDENCE a single frame counts. yolov8m hands
+# out 0.6-0.7 for real people even in the dark, and those don't need a second opinion.
+SURE_CONFIDENCE = 0.6   # --sure-confidence
+
+# Night: auto exposure meters the whole frame, and one lit-up tree keeps the exposure short
+# while the sidewalk goes black. With --night-exposure N the script watches the frame's
+# brightness and switches the camera to manual exposure N (units of 100 us; 2000 = 0.2 s,
+# ~5 fps) when the scene is dark, and back to auto when it is light again. Camera is put
+# back on auto at startup so a stale manual setting can't blind it in the morning.
+NIGHT_DARK = 40         # mean pixel value (0-255) under auto exposure that counts as dark
+NIGHT_LIGHT = 150       # mean pixel value under the night exposure that counts as light again
+NIGHT_DWELL = 60.0      # seconds between switches, so dusk doesn't flap
+scene_luma = None       # mean brightness of a recent frame, sampled every couple of seconds
+night = False           # camera is on the night exposure
 recent = []             # True/False per frame: was there a confident person?
 # A box touching the left/right edge of the frame and narrower than this (fraction of the
 # frame width) is ignored: it's a pole or a car corner half out of shot, not a person. A
@@ -218,6 +232,7 @@ def on_probe(pad, info):
     objs = list(roi.get_objects_typed(hailo.HAILO_DETECTION))
 
     frame = grab_frame(buf, s, fw, fh) if debug_wanted() else None
+    sample_luma(buf, s, fw, fh, frame)
 
     dets = []   # every person seen, (x, y, w, h, confidence), normalised to the frame
     for det in objs:
@@ -240,17 +255,17 @@ def on_probe(pad, info):
     now = time.time()
 
     # follow the largest confident person
-    best = None; best_area = -1.0
+    best = None; best_area = -1.0; best_c = 0.0
     for (x, y, w, h, c) in dets:
         if c is None or c < MIN_CONFIDENCE:
             continue
         if w * h > best_area:
-            best_area, best = w * h, (x, y, w, h)
+            best_area, best, best_c = w * h, (x, y, w, h), c
 
-    # debounce: present only when seen in enough of the last few frames
+    # debounce: present only when seen in enough of the last few frames, or the model is sure
     recent.append(best is not None)
     del recent[:-PRESENT_WINDOW]
-    present = sum(recent) >= PRESENT_FRAMES
+    present = sum(recent) >= PRESENT_FRAMES or (best is not None and best_c >= SURE_CONFIDENCE)
 
     global ema_cx, last_seen, coast
     if present and not best:
@@ -263,7 +278,7 @@ def on_probe(pad, info):
         cx = (x + 0.5 * w)
         ema_cx = cx if ema_cx is None else (ALPHA * cx + (1 - ALPHA) * ema_cx)
         track_hist.append((now, x, w))
-        while track_hist and now - track_hist[0][0] > COAST_FIT:
+        while len(track_hist) > 6 and now - track_hist[0][0] > COAST_FIT:   # at night ~5 fps: keep 6
             track_hist.pop(0)
         coast = None
         if not calibrating:
@@ -303,7 +318,10 @@ def _fit(ts, xs):
 def start_coast(now):
     """The person just vanished. If they were walking at a steady pace, return how to keep the
     eyes going: (speed in cx/s, now, cx to stop at or None, time to give up)."""
-    if len(track_hist) < 6 or now - track_hist[-1][0] > 0.5:
+    # the debounce takes PRESENT_WINDOW frames to admit they're gone; at night's ~5 fps that
+    # is over a second, so judge "recent" by the frame interval the history shows
+    dt = (track_hist[-1][0] - track_hist[0][0]) / max(1, len(track_hist) - 1)
+    if len(track_hist) < 6 or now - track_hist[-1][0] > max(0.5, PRESENT_WINDOW * dt + 0.1):
         if log_frames:
             print(f"no coast: {len(track_hist)} samples, last {now - track_hist[-1][0]:.2f}s ago", flush=True)
         return None
@@ -331,6 +349,48 @@ def start_coast(now):
             stop = hi + 0.03 if v > 0 else lo - 0.03
             return (v, t_last, stop, now + min(8.0, abs(stop - here) / abs(v)) + 0.5)
     return (v, t_last, None, now + COAST_MAX)
+
+
+_luma_next = 0.0
+def sample_luma(buf, s, fw, fh, frame):
+    """Every couple of seconds, note how bright the scene is (for the night exposure switch)."""
+    global scene_luma, _luma_next
+    now = time.time()
+    if now < _luma_next:
+        return
+    _luma_next = now + 2.0
+    if frame is None:
+        frame = grab_frame(buf, s, fw, fh)
+    if frame is not None:
+        scene_luma = float(frame[::8, ::8].mean())
+
+
+def set_exposure(manual):
+    """Put the camera on manual exposure `manual` (100 us units), or back on auto with 0."""
+    args = ["v4l2-ctl", "-d", CAMERA, "-c", "auto_exposure=1", "-c", f"exposure_time_absolute={int(manual)}"] \
+        if manual else ["v4l2-ctl", "-d", CAMERA, "-c", "auto_exposure=3"]
+    try:
+        subprocess.run(args, check=True, capture_output=True, timeout=5)
+    except Exception as e:
+        print(f"exposure: {' '.join(args[3:])} failed: {e}", flush=True)
+        return False
+    print(f"exposure: {'manual ' + str(int(manual)) if manual else 'auto'}", flush=True)
+    return True
+
+
+def night_loop(exposure):
+    """Dark under auto exposure -> switch to the night exposure; light under it -> back to auto."""
+    global night
+    set_exposure(0); night = False
+    last_switch = time.time()
+    while True:
+        time.sleep(2.0)
+        if scene_luma is None or time.time() - last_switch < NIGHT_DWELL:
+            continue
+        if not night and scene_luma < NIGHT_DARK:
+            night = set_exposure(exposure); last_switch = time.time()
+        elif night and scene_luma > NIGHT_LIGHT:
+            night = not set_exposure(0); last_switch = time.time()
 
 
 def idle_loop(after):
@@ -446,6 +506,8 @@ def render(snap):
         text = f"LOOKING AROUND cx={ema_txt} duty={duty:.1f} people={len(dets)}"
     else:
         text = f"eyes cx={ema_txt} duty={duty:.1f} people={len(dets)}"
+    if night:
+        text += " night"
     cv2.putText(img, text, (8, 22), font, 0.6, (0, 0, 0), 4)
     cv2.putText(img, text, (8, 22), font, 0.6, (255, 255, 255), 1)
     return img
@@ -503,7 +565,7 @@ function post(u){fetch(u,{method:'POST'}).then(r=>r.text()).then(t=>{if(t&&t!='o
 function poll(){fetch('/status').then(r=>r.json()).then(s=>{S=s;
  const cx=s.cx==null?'-':s.cx.toFixed(3);
  document.getElementById('st').textContent=(s.calibrating?'HOLD  ':s.coasting?'COAST ':s.idle?'LOOK  ':'TRACK ')+'cx='+cx+'  duty='+s.duty.toFixed(1)
-   +(s.cx!=null?'  calib says '+s.predicted.toFixed(1):'')+'  people='+s.people;
+   +(s.cx!=null?'  calib says '+s.predicted.toFixed(1):'')+'  people='+s.people+(s.night?'  night':'')+(s.luma!=null?'  light='+s.luma.toFixed(0):'');
  document.getElementById('hold').className=s.calibrating?'on':'';
  document.getElementById('hold').textContent=s.calibrating?'Holding (tap to track)':'Hold eyes';
  document.getElementById('pairs').textContent='marks: '+JSON.stringify(s.marks.map(p=>[+p[0].toFixed(3),+p[1].toFixed(1)]))
@@ -515,7 +577,7 @@ setInterval(poll,500);poll();
 def status_json():
     return json.dumps({
         "cx": ema_cx, "duty": current_duty, "calibrating": calibrating, "idle": idle,
-        "coasting": coast is not None,
+        "coasting": coast is not None, "night": night, "luma": scene_luma,
         "predicted": cx_to_duty(ema_cx) if ema_cx is not None else None,
         "people": len(debug_snap[1]) if debug_snap else 0,
         "marks": marks, "calibration": CALIBRATION,
@@ -648,7 +710,7 @@ def link_chain(elems):
             sys.exit(1)
 
 def main():
-    global calibrating, log_frames, save_enabled, CAMERA_SIZE, MIN_CONFIDENCE
+    global calibrating, log_frames, save_enabled, CAMERA_SIZE, MIN_CONFIDENCE, SURE_CONFIDENCE
 
     ap = argparse.ArgumentParser(description="Halloween eyes: follow people with the eyes")
     ap.add_argument("--debug-port", type=int, default=DEBUG_PORT,
@@ -659,6 +721,10 @@ def main():
                     help="don't track; set the duty cycle by typing numbers so you can build CALIBRATION")
     ap.add_argument("--min-confidence", type=float, default=MIN_CONFIDENCE,
                     help=f"follow people the model is at least this sure of; below shows as a red box (default {MIN_CONFIDENCE})")
+    ap.add_argument("--sure-confidence", type=float, default=SURE_CONFIDENCE,
+                    help=f"at or above this a single frame counts, no persistence needed (default {SURE_CONFIDENCE})")
+    ap.add_argument("--night-exposure", type=int, default=0,
+                    help="manual exposure (100us units, e.g. 2000) to switch the camera to when the scene is dark; 0 = never")
     ap.add_argument("--idle-after", type=float, default=IDLE_AFTER,
                     help=f"with nobody in view this many seconds, look around (default {IDLE_AFTER}, 0 = never)")
     ap.add_argument("--model", default=MODEL, choices=["yolov8s", "yolov8m"],
@@ -668,6 +734,7 @@ def main():
                          f"The model still gets 640x640. Default {CAMERA_SIZE[0]}x{CAMERA_SIZE[1]}")
     args = ap.parse_args()
     MIN_CONFIDENCE = args.min_confidence
+    SURE_CONFIDENCE = args.sure_confidence
 
     try:
         w, h = (int(v) for v in args.camera_size.lower().split("x"))
@@ -693,6 +760,8 @@ def main():
         threading.Thread(target=calibrate_loop, daemon=True).start()
     if args.idle_after > 0:
         threading.Thread(target=idle_loop, args=(args.idle_after,), daemon=True).start()
+    if args.night_exposure > 0:
+        threading.Thread(target=night_loop, args=(args.night_exposure,), daemon=True).start()
 
     # elements matching the pipeline that linked for you
     W, H = CAMERA_SIZE

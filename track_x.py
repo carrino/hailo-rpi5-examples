@@ -322,13 +322,15 @@ def start_coast(now):
             print(f"no coast: speed {v:+.3f}/s err {err:.3f} at cx {track_hist[-1][1] + 0.5 * track_hist[-1][2]:.2f}",
                   flush=True)
         return None
-    _, x, w = track_hist[-1]
+    # the clock starts at the last real sighting: the debounce takes a few frames to admit
+    # they're gone, and the eyes catch that up on the first coasting frame
+    t_last, x, w = track_hist[-1]
     here = x + 0.5 * w
     for lo, hi in BLOCKED:
         if x <= hi + 0.05 and x + w >= lo - 0.05:   # the box touches the span
             stop = hi + 0.03 if v > 0 else lo - 0.03
-            return (v, now, stop, now + min(8.0, abs(stop - here) / abs(v)) + 0.5)
-    return (v, now, None, now + COAST_MAX)
+            return (v, t_last, stop, now + min(8.0, abs(stop - here) / abs(v)) + 0.5)
+    return (v, t_last, None, now + COAST_MAX)
 
 
 def idle_loop(after):

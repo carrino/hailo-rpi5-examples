@@ -11,6 +11,78 @@ sudo cat /sys/kernel/debug/pwm  # pwm-2   (sysfs): requested enabled period: 100
 pinctrl  | grep pwm -i # we use pin 12 which is gpio18 18: a3    pd | hi // GPIO18 = PWM0_CHAN2
 ```
 
+runs at boot as a systemd service (track.service in this repo). to (re)install it:
+```bash
+sudo ln -sf /home/pi/hailo-rpi5-examples/track.service /etc/systemd/system/track.service
+sudo systemctl daemon-reload && sudo systemctl enable --now track
+sudo systemctl restart track                 # after changing code
+sudo journalctl -u track -n 30 --no-pager    # its logs
+```
+
+see what the camera sees: the live view is on by default, open http://raspberrypi.local:8080/ on a phone/laptop
+on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs nothing while nobody is watching.
+```bash
+./track.sh                                         # same as at boot; view on :8080
+./track.sh --debug-port 0                          # turn the view off
+./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
+./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
+./track.sh --model yolov8m                         # bigger detector: sees small/far people better, ~half the fps
+./track.sh --idle-after 30                         # look around after this long with nobody in view (default 15, 0 = never)
+./track.sh --night-exposure 2000                   # switch to this manual exposure when it's dark (see below)
+./track.sh --model yolov8m --min-confidence 0.3     # bigger model for the dark; the .hef needs downloading (see below)
+```
+the model's input is 640x640, so the 1280x720 frame is squashed into it and people come out half as wide.
+that has been fine. (tiling the frame to keep people full size was tried and taken out again: it
+cut the refresh rate, invented phantom people at the tile edges, and didn't help at night.)
+with nobody in view for `IDLE_AFTER` seconds (15) the eyes look around on their own: an eased look from one
+end of `IDLE_RANGE` (cx 0.1 to 0.9, through the calibration) to the other taking `IDLE_MOVE` seconds (16), then
+`IDLE_REST` seconds (15) still, then a look back. it starts from wherever the eyes are, stops the moment someone
+is seen, and the header/page say LOOKING AROUND / LOOK. holding the eyes from the page also stops it.
+when the person being followed vanishes mid-frame while walking at a steady pace (behind the trellises or the
+tree) the eyes keep going at that pace: for `COAST_MAX` seconds (3), or if they vanished at one of the `BLOCKED`
+spans (cx ranges, tinted red on the page; set them for your view) until they should be out the other side.
+the header says COASTING. someone reappearing takes over at once; a person who stops in view is still seen.
+people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
+reaches the code; `MIN_CONFIDENCE` in track_x.py (0.35, or `--min-confidence`) is what gets followed. red boxes on
+the page are the band in between: if real people show up red, lower it; if bushes show up red, don't. to try a
+value without editing anything, put it on the ExecStart line of track.service (`track.sh --min-confidence 0.5`),
+`sudo systemctl daemon-reload`, restart.
+a person has to be seen in `PRESENT_FRAMES` of the last `PRESENT_WINDOW` frames (3 of 8, about a quarter second) to be followed or
+to reset the idle timer: a one-frame flicker on a bush used to move the eyes and park them for 15 s. unless the
+model is sure: at or above `SURE_CONFIDENCE` (0.6, `--sure-confidence`) one frame is enough.
+the camera keeps whatever v4l2 controls it was last given, even across a reboot, so the script puts them in a
+known state every start (`CAMERA_DEFAULTS`: auto exposure, anti-flicker off, gain 0, gamma 100...). anti-flicker
+off matters: with it on the exposure can't go shorter than a mains half-cycle and a sunny day comes out white.
+at night: auto exposure meters the whole frame, so a lit-up tree keeps the exposure short and the sidewalk goes
+black. `--night-exposure 2000` (100 us units; 2000 = 0.2 s, ~5 fps) makes the script watch the frame brightness
+(shown as `light=` on the page) and switch the camera to that manual exposure when the scene is dark and back to
+auto when it is light, a minute apart at most. the camera is put back on auto at startup. `--model yolov8m`
+helps at night too; the file is not installed by default:
+`sudo wget -O /usr/local/hailo/resources/models/hailo8l/yolov8m.hef https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.14.0/hailo8l/yolov8m.hef`
+boxes touching the left/right edge narrower than `EDGE_MIN_WIDTH` (3% of the frame) are ignored entirely:
+a pole or car corner half out of shot kept getting called a person at 0.2-0.38.
+the model always gets 640x640 whatever the capture size is, so a bigger capture costs the Hailo nothing
+(only some CPU for jpeg decode). `v4l2-ctl -d /dev/video0 --list-formats-ext` lists what the camera offers.
+green box = person being tracked, yellow = other person, red = below MIN_CONFIDENCE
+
+tune where the eyes point, from the phone page (http://ai.local:8080/):
+1. tap **Hold eyes** so tracking stops fighting you
+2. stand somewhere, wait for the green box, use the -5/-1/+1/+5 buttons until the eyes look at you
+3. tap **Mark (cx, duty)**. repeat at a few spots across the view (left, middle, right)
+4. tap **Apply marks**: the marks become the calibration, saved to calibration.json (loaded at boot,
+   overrides CALIBRATION in track_x.py). **Reset calibration** goes back to duty = cx*100.
+   **Flip direction** mirrors left/right (camera mounted the other way up).
+
+the header shows the cx it sees and the duty it sent; in hold mode it also shows what the
+current calibration would send, so you can see how far off it is. each Mark also saves a
+snapshot to ~/eyes_marks/. the old stdin way still exists: `./track.sh --calibrate`.
+
+ssh
+```bash
+ssh pi@raspberrypi.local        # or ssh pi@<ip>, find the ip with `hostname -I` on the pi
+ssh-copy-id pi@raspberrypi.local # once, so you don't need a password
+```
+
 
 
 ![Banner](doc/images/hailo_rpi_examples_banner.png)

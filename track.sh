@@ -3,4 +3,4 @@
 cd
 cd hailo-rpi5-examples
 source setup_env.sh
-./track_x.py
+./track_x.py "$@"

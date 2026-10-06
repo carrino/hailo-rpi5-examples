@@ -1,6 +1,6 @@
 {
   "iou_threshold": 0.7,
-  "detection_threshold": 0.4,
+  "detection_threshold": 0.2,
   "output_format_type": "HAILO_FORMAT_TYPE_FLOAT32",
   "labels": [
     "person"

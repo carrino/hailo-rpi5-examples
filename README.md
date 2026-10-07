@@ -26,10 +26,9 @@ on the same wifi (boxes, cx grid, magenta line = where the eyes aim). it costs n
 ./track.sh --debug-port 0                          # turn the view off
 ./track.sh --save-dir ~/eyes_debug --save-every 1  # record annotated frames to look at later
 ./track.sh --camera-size 640x480                   # capture size; default is 1280x720, which is a wider view on this camera
-./track.sh --model yolov8m                         # bigger detector: sees small/far people better, ~half the fps
+./track.sh --model yolov8s                         # smaller detector: ~twice the fps, misses more small/far people
 ./track.sh --idle-after 30                         # look around after this long with nobody in view (default 15, 0 = never)
 ./track.sh --night-exposure 2000                   # switch to this manual exposure when it's dark (see below)
-./track.sh --model yolov8m --min-confidence 0.3     # bigger model for the dark; the .hef needs downloading (see below)
 ```
 the model's input is 640x640, so the 1280x720 frame is squashed into it and people come out half as wide.
 that has been fine. (tiling the frame to keep people full size was tried and taken out again: it
@@ -43,7 +42,7 @@ tree) the eyes keep going at that pace: for `COAST_MAX` seconds (3), or if they 
 spans (cx ranges, tinted red on the page; set them for your view) until they should be out the other side.
 the header says COASTING. someone reappearing takes over at once; a person who stops in view is still seen.
 people look small in the wide view. yolo_person.json's `detection_threshold` (0.2) is the hard floor for what
-reaches the code; `MIN_CONFIDENCE` in track_x.py (0.35, or `--min-confidence`) is what gets followed. red boxes on
+reaches the code; `MIN_CONFIDENCE` in track_x.py (0.3, or `--min-confidence`) is what gets followed. red boxes on
 the page are the band in between: if real people show up red, lower it; if bushes show up red, don't. to try a
 value without editing anything, put it on the ExecStart line of track.service (`track.sh --min-confidence 0.5`),
 `sudo systemctl daemon-reload`, restart.
@@ -56,8 +55,9 @@ off matters: with it on the exposure can't go shorter than a mains half-cycle an
 at night: auto exposure meters the whole frame, so a lit-up tree keeps the exposure short and the sidewalk goes
 black. `--night-exposure 2000` (100 us units; 2000 = 0.2 s, ~5 fps) makes the script watch the frame brightness
 (shown as `light=` on the page) and switch the camera to that manual exposure when the scene is dark and back to
-auto when it is light, a minute apart at most. the camera is put back on auto at startup. `--model yolov8m`
-helps at night too; the file is not installed by default:
+auto when it is light, a minute apart at most. the camera is put back on auto at startup.
+the default model is yolov8m (better on small, far and dim people than yolov8s); its file is not installed by
+default, so on a new Pi fetch it once (or run with `--model yolov8s`):
 `sudo wget -O /usr/local/hailo/resources/models/hailo8l/yolov8m.hef https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.14.0/hailo8l/yolov8m.hef`
 boxes touching the left/right edge narrower than `EDGE_MIN_WIDTH` (3% of the frame) are ignored entirely:
 a pole or car corner half out of shot kept getting called a person at 0.2-0.38.

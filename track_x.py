@@ -18,7 +18,8 @@ pwm = HardwarePWM(pwm_channel=2, hz=10000, chip=0)
 CAMERA = "/dev/video0"
 CAMERA_SIZE = (1280, 720)   # MJPEG capture size; --camera-size WxH. The model always gets 640x640.
                             # 16:9 is a noticeably wider view than 640x480 on this camera.
-MODEL = "yolov8s"   # --model yolov8m sees small (far away) people better, at ~half the fps
+MODEL = "yolov8m"   # --model; yolov8m sees small (far away) people much better than yolov8s, at ~half the fps.
+                    # Its .hef is not installed by default, see the README.
 MODEL_SIZE = 640    # the input size baked into the yolov8 .hef files
 HEF_DIR = "/usr/local/hailo/resources/models/hailo8l"
 SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
@@ -26,8 +27,8 @@ SO  = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
 ALPHA = 0.25
 # Below this a detection is shown as a red box but not followed. yolo_person.json's
 # detection_threshold is the hard floor: nothing under it reaches this code at all.
-MIN_CONFIDENCE = 0.35   # --min-confidence. At night a real person hovers around 0.4; the
-                        # debounce below is what keeps bushes and fence posts out, not this.
+MIN_CONFIDENCE = 0.3    # --min-confidence. Far people and people half behind a trellis score 0.25-0.5;
+                        # the debounce below is what keeps bushes and fence posts out, not this.
 # A person has to be seen in PRESENT_FRAMES of the last PRESENT_WINDOW frames to count: a
 # one-frame flicker on a bush used to yank the eyes a quarter of the way over and park them
 # there until the idle look kicked in. The same rule in reverse means one missed frame
